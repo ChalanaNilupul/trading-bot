@@ -1,0 +1,17 @@
+{
+  "name": "trading-bot",
+  "version": "3.0.0",
+  "description": "Paper trading bot with shared backtest/live engine and account-level risk controls",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "bot": "node src/index.js",
+    "backtest": "node src/backtester.js",
+    "scan": "node src/scanner.js",
+    "test": "node test/selftest.js",
+    "compare": "node src/compare.js",
+    "api": "node src/api.js"
+  }
+}
