@@ -6,7 +6,8 @@ Requires Node 18+. No dependencies.
 npm test                          # 22 self-tests (indicators, risk, guard, engine accounting, no-lookahead)
 npm run backtest                  # SYMBOL=BTCUSDT INTERVAL=15m CANDLES=20000 ... (downloads + caches candles)
 npm run scan                      # ranks the most liquid USDT pairs by signal
-npm run bot                       # continuous paper bot, state in data/state_*.json
+npm run bot                       # continuous paper bot (Breakout 50/20, 4h, 8 coins), state in data/state_*.json
+npm run compare                   # strategy comparison harness (SET=breakout for the neighbouring-settings check)
 ```
 
 Offline demo: `node tools/synth.js data/synthetic.json 20000 && DATA_FILE=data/synthetic.json npm run backtest`

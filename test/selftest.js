@@ -5,6 +5,7 @@ const { RiskGuard } = require("../src/riskGuard");
 const { Engine } = require("../src/engine");
 const { analysisAt, getStrategyAnalysis } = require("../src/strategy");
 const { generateCandles } = require("../tools/synth");
+const { STRATEGIES, BREAKOUT_VARIANTS, findStrategy } = require("../src/strategies");
 
 let passed = 0;
 function test(name, fn) {
@@ -51,6 +52,23 @@ test("analysis at i == analysis on candles[0..i] only", () => {
         near(full.indicators.rsi14, trunc.indicators.rsi14, 1e-7);
         near(full.indicators.adx14, trunc.indicators.adx14, 1e-7);
     }
+});
+
+test("every strategy is causal (decision at i ignores future candles)", () => {
+    for (const st of [...STRATEGIES, ...BREAKOUT_VARIANTS]) {
+        const ctx = st.prepare(candles, series);
+        for (const i of [300, 700, 1200, 1499]) {
+            const part = candles.slice(0, i + 1);
+            const s2 = ind.buildSeries(part);
+            const a = st.analyze(ctx, candles, series, i);
+            const b = st.analyze(st.prepare(part, s2), part, s2, i);
+            assert.equal(a.signal, b.signal, `${st.name} @${i}`);
+        }
+    }
+});
+test("findStrategy resolves names and rejects unknown ones", () => {
+    assert.equal(findStrategy("breakout 50/20").name, "Breakout 50/20");
+    assert.throws(() => findStrategy("nope"));
 });
 
 console.log("\nRisk manager");

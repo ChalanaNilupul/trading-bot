@@ -8,7 +8,7 @@ const path = require("path");
 const { buildSeries, WARMUP } = require("./indicators");
 const { Engine } = require("./engine");
 const { computeMetrics } = require("./metrics");
-const { STRATEGIES } = require("./strategies");
+const { STRATEGIES, BREAKOUT_VARIANTS } = require("./strategies");
 const { loadCandles, intervalMs } = require("./data");
 
 const list = (v, d) => (v || d).split(",").map(s => s.trim()).filter(Boolean);
@@ -18,6 +18,8 @@ const SPLIT = Number(process.env.SPLIT || 0.7);
 const FEE_RATE = Number(process.env.FEE_RATE ?? 0.001);
 const SLIPPAGE = Number(process.env.SLIPPAGE ?? 0.0005);
 const REFRESH = process.env.REFRESH === "1";
+// SET=breakout runs only the breakout family with neighbouring settings (robustness check).
+const CANDIDATES = (process.env.SET || "").toLowerCase() === "breakout" ? BREAKOUT_VARIANTS : STRATEGIES;
 const CANDLES = { "15m": 20000, "1h": 20000, "4h": 10000, "1d": 3000 };
 
 // Pass criteria (pooled across coins, out-of-sample)
@@ -92,7 +94,7 @@ async function main() {
         }
         if (datasets.length === 0) continue;
 
-        for (const strategy of STRATEGIES) {
+        for (const strategy of CANDIDATES) {
             console.log(`\n${strategy.name}  -  ${strategy.description}`);
             console.log(`  ${pad("Coin", 9)}${rpad("IS PF", 7)}${rpad("OOS trades", 12)}${rpad("Win%", 7)}${rpad("OOS PF", 8)}${rpad("Return", 9)}${rpad("MaxDD", 8)}${rpad("Buy&Hold", 10)}`);
 
