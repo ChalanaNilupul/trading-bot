@@ -6,113 +6,329 @@ const { analysisAt } = require("./strategy");
 const { Engine } = require("./engine");
 const { computeMetrics, printMetrics } = require("./metrics");
 
-const SYMBOL = process.env.SYMBOL || "ETHUSDT";
-const INTERVAL = process.env.INTERVAL || "15m"; // same default as the live bot
-const TOTAL_CANDLES = Number(process.env.CANDLES || 20000);
-const SLIPPAGE = Number(process.env.SLIPPAGE ?? 0.0005);
-const FEE_RATE = Number(process.env.FEE_RATE ?? 0.001);
-const TRAILING = process.env.TRAILING !== "0";
-const SPLIT = Number(process.env.SPLIT || 0.7); // in-sample / out-of-sample split
-const VERBOSE = process.env.VERBOSE === "1";
-const DATA_FILE = process.env.DATA_FILE;       // load candles from a JSON file instead of Binance
-const REFRESH = process.env.REFRESH === "1";
-// Live, the kill switch needs a manual reset. In a backtest, auto-resume after N days so one halt
-// doesn't hide the rest of the data. HALT_RESUME_DAYS=0 keeps it halted for the whole run.
-const HALT_RESUME_DAYS = Number(process.env.HALT_RESUME_DAYS ?? 7);
+const DEFAULTS = {
+    symbol: process.env.SYMBOL || "ETHUSDT",
+    interval: process.env.INTERVAL || "15m",
+    candles: Number(process.env.CANDLES || 20000),
+    slippage: Number(process.env.SLIPPAGE ?? 0.0005),
+    feeRate: Number(process.env.FEE_RATE ?? 0.001),
+    trailing: process.env.TRAILING !== "0",
+    split: Number(process.env.SPLIT || 0.7),
+    verbose: process.env.VERBOSE === "1",
+    dataFile: process.env.DATA_FILE,
+    refresh: process.env.REFRESH === "1",
+    haltResumeDays: Number(process.env.HALT_RESUME_DAYS ?? 7),
+};
 
-const UNIT_MS = { m: 60e3, h: 3600e3, d: 86400e3, w: 7 * 86400e3 };
+const UNIT_MS = {
+    m: 60e3,
+    h: 3600e3,
+    d: 86400e3,
+    w: 7 * 86400e3,
+};
+
 function intervalMs(interval) {
     const match = /^(\d+)([mhdw])$/.exec(interval);
-    if (!match) throw new Error(`Unsupported interval: ${interval}`);
+
+    if (!match) {
+        throw new Error(`Unsupported interval: ${interval}`);
+    }
+
     return Number(match[1]) * UNIT_MS[match[2]];
 }
 
-async function loadCandles() {
-    if (DATA_FILE) return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+async function loadCandles(config) {
+    const {
+        symbol,
+        interval,
+        candles: totalCandles,
+        dataFile,
+        refresh,
+    } = config;
 
-    const cache = path.join("data", `${SYMBOL}_${INTERVAL}_${TOTAL_CANDLES}.json`);
-    if (!REFRESH && fs.existsSync(cache)) {
-        console.log(`Using cached candles: ${cache} (REFRESH=1 to re-download)`);
+    if (dataFile) {
+        return JSON.parse(fs.readFileSync(dataFile, "utf8"));
+    }
+
+    const cache = path.join(
+        "data",
+        `${symbol}_${interval}_${totalCandles}.json`
+    );
+
+    if (!refresh && fs.existsSync(cache)) {
+        console.log(
+            `Using cached candles: ${cache} (REFRESH=1 to re-download)`
+        );
+
         return JSON.parse(fs.readFileSync(cache, "utf8"));
     }
 
-    const candles = await getHistoricalCandles(SYMBOL, INTERVAL, TOTAL_CANDLES);
+    const candles = await getHistoricalCandles(
+        symbol,
+        interval,
+        totalCandles
+    );
+
     fs.mkdirSync("data", { recursive: true });
     fs.writeFileSync(cache, JSON.stringify(candles));
+
     return candles;
 }
 
-function runSegment(candles, series, start, end) {
+function runSegment(candles, series, start, end, config) {
     const engine = new Engine({
         startingBalance: 1000,
-        feeRate: FEE_RATE,
-        slippage: SLIPPAGE,
-        trailing: TRAILING,
-        guard: { haltCooldownMs: HALT_RESUME_DAYS > 0 ? HALT_RESUME_DAYS * 86400e3 : null },
-        onEvent: VERBOSE ? e => console.log(`[${e.type}] ${e.message}`) : undefined,
+        feeRate: config.feeRate,
+        slippage: config.slippage,
+        trailing: config.trailing,
+
+        guard: {
+            haltCooldownMs:
+                config.haltResumeDays > 0
+                    ? config.haltResumeDays * 86400e3
+                    : null,
+        },
+
+        onEvent: config.verbose
+            ? (e) => console.log(`[${e.type}] ${e.message}`)
+            : undefined,
     });
 
     for (let i = start; i < end; i++) {
-        engine.onCandle(candles[i], analysisAt(candles, series, i));
+        engine.onCandle(
+            candles[i],
+            analysisAt(candles, series, i)
+        );
     }
-    engine.closeAll(candles[end - 1].close, candles[end - 1].closeTime, "END OF TEST");
+
+    engine.closeAll(
+        candles[end - 1].close,
+        candles[end - 1].closeTime,
+        "END OF TEST"
+    );
 
     const metrics = computeMetrics({
         trades: engine.trades,
         equityCurve: engine.equityCurve,
         startingBalance: engine.cfg.startingBalance,
-        periodsPerYear: (365 * 86400e3) / intervalMs(INTERVAL),
+        periodsPerYear:
+            (365 * 86400e3) / intervalMs(config.interval),
     });
-    const buyHold = (candles[end - 1].close / candles[start].open - 1) * 100;
 
-    return { engine, metrics, buyHold };
+    const buyHold =
+        (candles[end - 1].close / candles[start].open - 1) * 100;
+
+    return {
+        engine,
+        metrics,
+        buyHold,
+    };
 }
 
-async function runBacktest() {
+async function runBacktest(options = {}) {
+    const config = {
+        ...DEFAULTS,
+        ...options,
+    };
+
+    const {
+        symbol,
+        interval,
+        candles: totalCandles,
+        feeRate,
+        slippage,
+        trailing,
+        split,
+        haltResumeDays,
+    } = config;
+
     console.log("\n==============================");
     console.log("        BACKTEST V3");
     console.log("==============================");
-    console.log(`${SYMBOL} ${INTERVAL} | fee ${(FEE_RATE * 100).toFixed(2)}% | slippage ${(SLIPPAGE * 100).toFixed(2)}% | trailing ${TRAILING ? "on" : "off"}`);
 
-    const candles = await loadCandles();
+    console.log(
+        `${symbol} ${interval} | fee ${(feeRate * 100).toFixed(2)}% | slippage ${(slippage * 100).toFixed(2)}% | trailing ${trailing ? "on" : "off"}`
+    );
+
+    const candles = await loadCandles(config);
+
     if (candles.length < WARMUP + 100) {
-        console.log(`Not enough candles (${candles.length}).`);
-        return;
+        throw new Error(
+            `Not enough candles (${candles.length}). Need at least ${WARMUP + 100}.`
+        );
     }
 
-    const days = ((candles[candles.length - 1].closeTime - candles[0].openTime) / 86400e3).toFixed(0);
+    const days = (
+        (candles[candles.length - 1].closeTime -
+            candles[0].openTime) /
+        86400e3
+    ).toFixed(0);
+
     console.log(`Candles: ${candles.length} (~${days} days)`);
 
-    const series = buildSeries(candles); // computed once: O(n)
-    const split = WARMUP + Math.floor((candles.length - WARMUP) * SPLIT);
+    const series = buildSeries(candles);
 
-    const full = runSegment(candles, series, WARMUP, candles.length);
-    const inSample = runSegment(candles, series, WARMUP, split);
-    const outSample = runSegment(candles, series, split, candles.length);
+    const splitIndex =
+        WARMUP +
+        Math.floor((candles.length - WARMUP) * split);
 
-    printMetrics("FULL PERIOD", full.metrics, full.buyHold);
-    printMetrics(`IN-SAMPLE (first ${Math.round(SPLIT * 100)}%)`, inSample.metrics, inSample.buyHold);
-    printMetrics(`OUT-OF-SAMPLE (last ${Math.round((1 - SPLIT) * 100)}%)`, outSample.metrics, outSample.buyHold);
+    const full = runSegment(
+        candles,
+        series,
+        WARMUP,
+        candles.length,
+        config
+    );
 
-    const haltExits = full.metrics.byReason["RISK HALT"] || 0;
-    console.log(`\nRiskGuard (full run): kill switch flattened ${haltExits} position(s)` + (HALT_RESUME_DAYS > 0 ? `, auto-resume after ${HALT_RESUME_DAYS}d (backtest only)` : ""));
+    const inSample = runSegment(
+        candles,
+        series,
+        WARMUP,
+        splitIndex,
+        config
+    );
 
-    console.log("\nHow to read this:");
-    console.log("  * If out-of-sample is much worse than in-sample, the strategy is overfit to the past.");
-    console.log("  * Profit factor < 1.3 or fewer than ~100 trades = not enough evidence of an edge.");
-    console.log("  * Compare against buy & hold: beating cash isn't enough if holding did better with less work.");
+    const outSample = runSegment(
+        candles,
+        series,
+        splitIndex,
+        candles.length,
+        config
+    );
+
+    printMetrics(
+        "FULL PERIOD",
+        full.metrics,
+        full.buyHold
+    );
+
+    printMetrics(
+        `IN-SAMPLE (first ${Math.round(split * 100)}%)`,
+        inSample.metrics,
+        inSample.buyHold
+    );
+
+    printMetrics(
+        `OUT-OF-SAMPLE (last ${Math.round((1 - split) * 100)}%)`,
+        outSample.metrics,
+        outSample.buyHold
+    );
+
+    const haltExits =
+        full.metrics.byReason?.["RISK HALT"] || 0;
+
+    console.log(
+        `\nRiskGuard (full run): kill switch flattened ${haltExits} position(s)` +
+        (haltResumeDays > 0
+            ? `, auto-resume after ${haltResumeDays}d (backtest only)`
+            : "")
+    );
+
+    /*
+     * Save CSV
+     */
 
     fs.mkdirSync("data", { recursive: true });
-    const header = "entryTime,exitTime,entryPrice,exitPrice,quantity,reason,grossPnL,fees,netPnL,rMultiple";
-    const rows = full.engine.trades.map(t => [
-        new Date(t.entryTime).toISOString(), new Date(t.exitTime).toISOString(),
-        t.entryPrice, t.exitPrice, t.quantity, t.reason, t.grossPnL, t.fees, t.netPnL, t.rMultiple,
+
+    const header =
+        "entryTime,exitTime,entryPrice,exitPrice,quantity,reason,grossPnL,fees,netPnL,rMultiple";
+
+    const rows = full.engine.trades.map((t) => [
+        new Date(t.entryTime).toISOString(),
+        new Date(t.exitTime).toISOString(),
+        t.entryPrice,
+        t.exitPrice,
+        t.quantity,
+        t.reason,
+        t.grossPnL,
+        t.fees,
+        t.netPnL,
+        t.rMultiple,
     ].join(","));
-    fs.writeFileSync(path.join("data", "backtest_trades.csv"), [header, ...rows].join("\n"));
-    console.log("Trade log: data/backtest_trades.csv\n");
+
+    const csvPath = path.join(
+        "data",
+        `backtest_trades_${symbol}_${interval}.csv`
+    );
+
+    fs.writeFileSync(
+        csvPath,
+        [header, ...rows].join("\n")
+    );
+
+    console.log(`Trade log: ${csvPath}`);
+
+    /*
+     * Structured result for API / frontend
+     */
+
+    return {
+        config: {
+            symbol,
+            interval,
+            candlesRequested: totalCandles,
+            candlesUsed: candles.length,
+            feeRate,
+            slippage,
+            trailing,
+            split,
+            haltResumeDays,
+        },
+
+        period: {
+            startTime: candles[0].openTime,
+            endTime: candles[candles.length - 1].closeTime,
+            days: Number(days),
+        },
+
+        full: {
+            metrics: full.metrics,
+            buyHold: full.buyHold,
+            trades: full.engine.trades,
+            equityCurve: full.engine.equityCurve,
+        },
+
+        inSample: {
+            metrics: inSample.metrics,
+            buyHold: inSample.buyHold,
+            trades: inSample.engine.trades,
+            equityCurve: inSample.engine.equityCurve,
+        },
+
+        outSample: {
+            metrics: outSample.metrics,
+            buyHold: outSample.buyHold,
+            trades: outSample.engine.trades,
+            equityCurve: outSample.engine.equityCurve,
+        },
+
+        risk: {
+            haltExits,
+        },
+
+        csv: csvPath,
+    };
 }
 
-runBacktest().catch(error => {
-    console.error("Backtest error:", error.message);
-    process.exitCode = 1;
-});
+/*
+ * Keep CLI usage working.
+ *
+ * Example:
+ *
+ * PowerShell:
+ * $env:SYMBOL="ETHUSDT"
+ * $env:INTERVAL="15m"
+ * $env:CANDLES="10000"
+ * node src/backtester.js
+ */
+
+if (require.main === module) {
+    runBacktest().catch((error) => {
+        console.error("Backtest error:", error.message);
+        process.exitCode = 1;
+    });
+}
+
+module.exports = {
+    runBacktest,
+};

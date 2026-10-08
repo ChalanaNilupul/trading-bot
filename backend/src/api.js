@@ -4,6 +4,7 @@ const { buildSeries, WARMUP } = require("./indicators");
 const store = require("./store");
 const { computeMetrics } = require("./metrics");
 const { Runner, SYMBOLS, INTERVAL, POLL_SECONDS, START_BALANCE, strategy } = require("./index");
+const { runBacktest } = require("./backtester");
 
 const PORT = Number(process.env.API_PORT || 4000);
 const HOST = process.env.API_HOST || "127.0.0.1";
@@ -226,6 +227,44 @@ async function handler(req, res) {
             for (const r of runners) { const price = currentPrice(r); r.engine.guard.resetHalt(r.engine.equity(price)); r.persist(); }
             return json(res, 200, { ok: true });
         }
+        if (req.method === "POST" && url.pathname === "/api/backtest") {
+    let body = "";
+
+    for await (const chunk of req) {
+        body += chunk;
+    }
+
+    let input = {};
+
+    if (body) {
+        try {
+            input = JSON.parse(body);
+        } catch {
+            return json(res, 400, {
+                error: "Invalid JSON body",
+            });
+        }
+    }
+
+    const result = await runBacktest({
+        symbol: input.symbol || "ETHUSDT",
+        interval: input.interval || "15m",
+        candles: Number(input.candles || 10000),
+        feeRate: Number(input.feeRate ?? 0.001),
+        slippage: Number(input.slippage ?? 0.0005),
+        trailing: input.trailing !== false,
+        split: Number(input.split || 0.7),
+        haltResumeDays: Number(
+            input.haltResumeDays ?? 7
+        ),
+        refresh: input.refresh === true,
+    });
+
+    return json(res, 200, {
+        success: true,
+        result,
+    });
+}
         return json(res, 404, { error: "Not found" });
     } catch (error) {
         console.error(error);
