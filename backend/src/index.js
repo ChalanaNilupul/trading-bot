@@ -12,7 +12,7 @@
  *   RESET_HALT=1   clear a tripped kill switch after you've reviewed why it fired
  *   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID   optional alerts
  */
-const { getFuturesCandles, getFuturesSymbolFilters } = require("./binance");
+const { getFuturesCandles, getFuturesTickerPrice, getFuturesSymbolFilters } = require("./binance");
 const { buildSeries, WARMUP } = require("./indicators");
 const { findStrategy, DEFAULT_STRATEGY } = require("./strategies");
 const { FuturesEngine } = require("./futuresEngine");
@@ -37,14 +37,15 @@ const log = msg => console.log(`[${new Date().toISOString()}] ${msg}`);
 const fmtPF = pf => (pf === Infinity ? "inf" : pf.toFixed(2));
 
 class Runner {
-    constructor(symbol) {
+    constructor(symbol, options = {}) {
         this.symbol = symbol;
+        this.strategy = options.strategy || strategy;
         this.lastProcessed = null;
         this.resetToken = null;
         this.errors = 0;
         this.stateFile = `data/state_futures_${symbol}_${INTERVAL}_${slug}.json`;
         this.tradeLog = `data/trades_futures_${symbol}_${INTERVAL}_${slug}.jsonl`;
-        this.engine = new FuturesEngine({
+        this.engine = options.engine || new FuturesEngine({
             startingBalance: RUNNER_BALANCE,
             leverage: LEVERAGE,
             feeRate: Number(process.env.FEE_RATE || 0.0005),
@@ -54,7 +55,7 @@ class Runner {
             maxPositionPercent: Number(process.env.MAX_MARGIN_PERCENT || 0.25),
             allowShort: process.env.SHORTS === "1",
             keepEquityCurve: false,
-            ...strategy.engine,
+            ...this.strategy.engine,
             onEvent: e => this.onEvent(e),
         });
         this.lastPrice = null;
@@ -63,8 +64,8 @@ class Runner {
 
     onEvent(e) {
         log(`${e.type.padEnd(5)} ${this.symbol} ${e.message}`);
-        if (e.type === "EXIT") store.appendLine(this.tradeLog, { symbol: this.symbol, strategy: strategy.name, ...e.trade });
-        if (["ENTRY", "EXIT", "GUARD"].includes(e.type)) notify(`${this.symbol} [${strategy.name}]: ${e.message}`);
+        if (e.type === "EXIT") store.appendLine(this.tradeLog, { symbol: this.symbol, strategy: this.strategy.name, ...e.trade });
+        if (["ENTRY", "EXIT", "GUARD"].includes(e.type)) notify(`${this.symbol} [${this.strategy.name}]: ${e.message}`);
     }
 
     persist() {
@@ -96,31 +97,60 @@ class Runner {
     }
 
     async tick() {
-        const candles = await getFuturesCandles(this.symbol, INTERVAL, 500);
+        const [candles, observedPrice] = await Promise.all([
+            getFuturesCandles(this.symbol, INTERVAL, 500),
+            getFuturesTickerPrice(this.symbol),
+        ]);
         if (candles.length < WARMUP + 1) {
             log(`${this.symbol}: not enough candle data`);
             return false;
         }
+        return this.processCandles(candles, observedPrice, Date.now());
+    }
 
+    processCandles(candles, observedPrice, executionTime) {
+        if (!Number.isFinite(observedPrice) || observedPrice <= 0) {
+            throw new Error(`Invalid observed execution price for ${this.symbol}`);
+        }
         // First ever run: start from the newest closed candle instead of replaying history.
         if (this.lastProcessed === null) this.lastProcessed = candles[candles.length - 2].closeTime;
 
         const series = buildSeries(candles);
-        const ctx = strategy.prepare(candles, series);
-        let processed = 0;
-
+        const ctx = this.strategy.prepare(candles, series);
+        const newIndices = [];
         for (let i = WARMUP; i < candles.length; i++) {
-            if (candles[i].closeTime <= this.lastProcessed) continue;
-            const analysis = strategy.analyze(ctx, candles, series, i);
-            this.engine.onCandle(candles[i], analysis);
-            this.lastProcessed = candles[i].closeTime;
-            this.lastPrice = candles[i].close;
-            this.lastNote = `${analysis.signal} | ${strategy.describe ? strategy.describe(ctx, candles, series, i) : ""}`;
-            processed++;
+            if (candles[i].closeTime > this.lastProcessed) newIndices.push(i);
+        }
+        if (newIndices.length === 0) {
+            this.lastPrice = observedPrice;
+            return false;
         }
 
-        if (processed > 0) this.persist();
-        return processed > 0;
+        const latestNewIndex = newIndices[newIndices.length - 1];
+        if (this.engine.pending?.type === "OPEN_LONG" || this.engine.pending?.type === "OPEN_SHORT") {
+            this.engine.pending = null;
+            log(`${this.symbol}: discarded stale entry signal while catching up`);
+        }
+        for (const i of newIndices) {
+            const isLatest = i === latestNewIndex;
+            const analysis = isLatest
+                ? this.strategy.analyze(ctx, candles, series, i)
+                : null;
+            this.engine.onCandle(candles[i], analysis, {
+                deferPending: !isLatest,
+                immediate: isLatest,
+                executionPrice: observedPrice,
+                executionTime,
+            });
+            this.lastProcessed = candles[i].closeTime;
+            if (isLatest) {
+                this.lastPrice = observedPrice;
+                this.lastNote = `${analysis.signal} | ${this.strategy.describe ? this.strategy.describe(ctx, candles, series, i) : ""}`;
+            }
+        }
+
+        this.persist();
+        return true;
     }
 
     summaryRow() {

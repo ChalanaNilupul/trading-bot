@@ -27,6 +27,7 @@ Stop it with `POST /api/bot/stop`. The API defaults to `127.0.0.1:4000`.
 - ATR stop-loss and take-profit, optional trailing stop, risk-based sizing, leverage/margin caps, simulated liquidation price and liquidation handling.
 - Risk controls: 3% daily loss, 10% max drawdown kill switch, 3 consecutive losses cooldown, max 6 entries/day, risk throttle after drawdown.
 - State and trade files are saved with `futures` in their names so previous spot state is not accidentally loaded.
+- The live paper runner evaluates only the newest newly closed candle for signals. When it detects a signal, it estimates an immediate fill from Binance's current last-traded price plus configured slippage; missed candles are still replayed for existing-position stops/funding but cannot trigger stale entries. This is a paper approximation, not an exchange fill or order-book simulation.
 
 ## Environment variables
 

@@ -4,6 +4,7 @@ const { calculatePosition } = require("../src/riskManager");
 const { RiskGuard } = require("../src/riskGuard");
 const { Engine } = require("../src/engine");
 const { FuturesEngine } = require("../src/futuresEngine");
+const { Runner } = require("../src");
 const { analysisAt, getStrategyAnalysis } = require("../src/strategy");
 const { generateCandles } = require("../tools/synth");
 const { STRATEGIES, BREAKOUT_VARIANTS, findStrategy } = require("../src/strategies");
@@ -212,6 +213,103 @@ test("futures paper engine opens an isolated leveraged long with stop, target an
     assert.ok(e.position.targetPrice > e.position.entryPrice);
     assert.ok(e.position.liquidationPrice < e.position.stopPrice);
     assert.ok(e.cash < 1000);
+});
+test("immediate paper execution fills at the observed price, not the closed candle open", () => {
+    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, feeRate: 0, slippage: 0, maxPositionPercent: 0.25 });
+    const executionTime = T + 90_000;
+    e.onCandle(candle(T, 100, 101, 99, 100), { ...neutral, signal: "BUY" }, {
+        immediate: true,
+        executionPrice: 110,
+        executionTime,
+    });
+    assert.equal(e.position.entryPrice, 110);
+    assert.equal(e.position.entryTime, executionTime);
+    assert.equal(e.pending, null);
+});
+test("delayed polling ignores stale signals from missed candles and uses only the latest close", () => {
+    const data = Array.from({ length: ind.WARMUP + 3 }, (_, i) => candle(
+        T + i * 60_000,
+        100,
+        101,
+        99,
+        100,
+    ));
+    const firstNewIndex = ind.WARMUP + 1;
+    const latestNewIndex = ind.WARMUP + 2;
+    const analyzed = [];
+    const testStrategy = {
+        name: "test",
+        engine: {},
+        prepare: () => ({}),
+        analyze: (_ctx, _candles, _series, i) => {
+            analyzed.push(i);
+            return { ...neutral, signal: i === firstNewIndex ? "BUY" : "HOLD" };
+        },
+    };
+    const engine = new FuturesEngine({ startingBalance: 1000, slippage: 0 });
+    const runner = new Runner("TESTUSDT", { strategy: testStrategy, engine });
+    runner.persist = () => {};
+    runner.lastProcessed = data[ind.WARMUP].closeTime;
+
+    runner.processCandles(data, 105, T + 5 * 60_000);
+
+    assert.deepEqual(analyzed, [latestNewIndex], "only the newest missed candle may create a signal");
+    assert.equal(engine.position, null, "a stale signal must not open a position");
+    assert.equal(engine.pending, null);
+    assert.equal(runner.lastProcessed, data[latestNewIndex].closeTime);
+    assert.equal(runner.lastPrice, 105);
+});
+test("delayed polling executes the latest signal at the current observed price", () => {
+    const data = Array.from({ length: ind.WARMUP + 3 }, (_, i) => candle(
+        T + i * 60_000,
+        100,
+        101,
+        99,
+        100,
+    ));
+    const testStrategy = {
+        name: "test",
+        engine: {},
+        prepare: () => ({}),
+        analyze: () => ({ ...neutral, signal: "BUY" }),
+    };
+    const engine = new FuturesEngine({ startingBalance: 1000, slippage: 0 });
+    const runner = new Runner("TESTUSDT", { strategy: testStrategy, engine });
+    runner.persist = () => {};
+    runner.lastProcessed = data[ind.WARMUP].closeTime;
+
+    runner.processCandles(data, 112, T + 5 * 60_000);
+
+    assert.equal(engine.position.entryPrice, 112);
+    assert.equal(engine.position.entryTime, T + 5 * 60_000);
+    assert.equal(engine.pending, null);
+});
+test("delayed polling closes a position at the current observed price", () => {
+    const data = Array.from({ length: ind.WARMUP + 3 }, (_, i) => candle(
+        T + i * 60_000,
+        100,
+        101,
+        99,
+        100,
+    ));
+    const testStrategy = {
+        name: "test",
+        engine: {},
+        prepare: () => ({}),
+        analyze: () => ({ ...neutral, signal: "SELL" }),
+    };
+    const engine = new FuturesEngine({ startingBalance: 1000, slippage: 0 });
+    engine.onCandle(candle(T, 100, 101, 99, 100), { ...neutral, signal: "BUY" });
+    engine.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
+    const runner = new Runner("TESTUSDT", { strategy: testStrategy, engine });
+    runner.persist = () => {};
+    runner.lastProcessed = data[ind.WARMUP].closeTime;
+
+    runner.processCandles(data, 90, T + 5 * 60_000);
+
+    assert.equal(engine.position, null);
+    assert.equal(engine.trades.at(-1).exitPrice, 90);
+    assert.equal(engine.trades.at(-1).reason, "SIGNAL");
 });
 test("futures paper engine opens short on SELL and closes on BUY without live orders", () => {
     const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, feeRate: 0.0005, slippage: 0, maxPositionPercent: 0.25 });

@@ -162,6 +162,15 @@ async function getFuturesTickers24h() {
     return request(`${FUTURES_URL}/fapi/v1/ticker/24hr`, { timeoutMs: 20000 });
 }
 
+async function getFuturesTickerPrice(symbol) {
+    const result = await request(`${FUTURES_URL}/fapi/v1/ticker/price?symbol=${encodeURIComponent(symbol)}`);
+    const price = Number(result.price);
+    if (!Number.isFinite(price) || price <= 0) {
+        throw new Error(`Invalid Futures ticker price for ${symbol}`);
+    }
+    return price;
+}
+
 async function getFuturesSymbolFilters(symbol) {
     const info = await request(`${FUTURES_URL}/fapi/v1/exchangeInfo?symbol=${encodeURIComponent(symbol)}`);
     const s = info.symbols?.[0];
@@ -178,4 +187,4 @@ async function getFuturesSymbolFilters(symbol) {
     };
 }
 
-module.exports = { getCandles, getHistoricalCandles, getTickers24h, getTopUSDTSymbols, getSymbolFilters, getFuturesCandles, getFuturesHistoricalCandles, getFuturesTickers24h, getFuturesSymbolFilters };
+module.exports = { getCandles, getHistoricalCandles, getTickers24h, getTopUSDTSymbols, getSymbolFilters, getFuturesCandles, getFuturesHistoricalCandles, getFuturesTickers24h, getFuturesTickerPrice, getFuturesSymbolFilters };
