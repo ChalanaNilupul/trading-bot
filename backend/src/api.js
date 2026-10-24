@@ -1,4 +1,5 @@
 const http = require("http");
+const crypto = require("crypto");
 const { getFuturesTickers24h, getFuturesCandles, getFuturesSymbolFilters } = require("./binance");
 const { buildSeries, WARMUP } = require("./indicators");
 const store = require("./store");
@@ -8,6 +9,18 @@ const { runFuturesBacktest } = require("./futuresBacktester");
 
 const PORT = Number(process.env.API_PORT || 4000);
 const HOST = process.env.API_HOST || "127.0.0.1";
+const API_KEY = process.env.API_KEY || "";
+if (API_KEY.length < 16) {
+    console.error("API_KEY env var is required (min 16 chars). Generate one with:\n  node -e \"console.log(require('crypto').randomBytes(24).toString('hex'))\"");
+    process.exit(1);
+}
+let backtestBusy = false;
+
+function authorized(req) {
+    const given = Buffer.from(String(req.headers["x-api-key"] || ""));
+    const want = Buffer.from(API_KEY);
+    return given.length === want.length && crypto.timingSafeEqual(given, want);
+}
 
 let running = false;
 let loopPromise = null;
@@ -263,7 +276,6 @@ function stopBot() {
 async function json(res, status, body) {
     res.writeHead(status, {
         "Content-Type": "application/json; charset=utf-8",
-        "Access-Control-Allow-Origin": "*",
         "Cache-Control": "no-store",
     });
     res.end(JSON.stringify(body));
@@ -271,10 +283,11 @@ async function json(res, status, body) {
 
 async function handler(req, res) {
     if (req.method === "OPTIONS") {
-        res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type" });
+        res.writeHead(204); // no CORS: browsers must go through the dashboard's server-side proxy
         return res.end();
     }
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (url.pathname !== "/api/health" && !authorized(req)) return json(res, 401, { error: "unauthorized" });
     try {
         await initRunners();
         if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true, mode: "FUTURES_PAPER", marketType: "USDⓈ-M FUTURES", liveOrdersEnabled: false, running, time: Date.now() });
@@ -309,6 +322,8 @@ async function handler(req, res) {
                 try { input = JSON.parse(body); }
                 catch { return json(res, 400, { error: "Invalid JSON body" }); }
             }
+            if (backtestBusy) return json(res, 429, { error: "A backtest is already running" });
+            backtestBusy = true;
             const result = await runFuturesBacktest({
                 symbol: input.symbol || "BTCUSDT",
                 interval: input.interval || "4h",
@@ -327,7 +342,7 @@ async function handler(req, res) {
                 maxTradesPerDay: Number(input.maxTradesPerDay ?? 6),
                 haltResumeDays: Number(input.haltResumeDays ?? 7),
                 split: Number(input.split ?? 0.7),
-            });
+            }).finally(() => { backtestBusy = false; });
             recordEvent("info", "FUTURES_BACKTEST", `Completed Futures backtest for ${result.config.symbol} (${result.config.candlesUsed} candles)`, { source: "backtest" });
             return json(res, 200, { success: true, result });
         }

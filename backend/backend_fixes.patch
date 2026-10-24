@@ -1,0 +1,243 @@
+diff -ruN a/src/api.js b/src/api.js
+--- a/src/api.js	2026-10-24 16:10:02.003946773 +0000
++++ b/src/api.js	2026-10-24 16:10:02.008096762 +0000
+@@ -1,4 +1,5 @@
+ const http = require("http");
++const crypto = require("crypto");
+ const { getFuturesTickers24h, getFuturesCandles, getFuturesSymbolFilters } = require("./binance");
+ const { buildSeries, WARMUP } = require("./indicators");
+ const store = require("./store");
+@@ -8,6 +9,18 @@
+ 
+ const PORT = Number(process.env.API_PORT || 4000);
+ const HOST = process.env.API_HOST || "127.0.0.1";
++const API_KEY = process.env.API_KEY || "";
++if (API_KEY.length < 16) {
++    console.error("API_KEY env var is required (min 16 chars). Generate one with:\n  node -e \"console.log(require('crypto').randomBytes(24).toString('hex'))\"");
++    process.exit(1);
++}
++let backtestBusy = false;
++
++function authorized(req) {
++    const given = Buffer.from(String(req.headers["x-api-key"] || ""));
++    const want = Buffer.from(API_KEY);
++    return given.length === want.length && crypto.timingSafeEqual(given, want);
++}
+ 
+ let running = false;
+ let loopPromise = null;
+@@ -263,7 +276,6 @@
+ async function json(res, status, body) {
+     res.writeHead(status, {
+         "Content-Type": "application/json; charset=utf-8",
+-        "Access-Control-Allow-Origin": "*",
+         "Cache-Control": "no-store",
+     });
+     res.end(JSON.stringify(body));
+@@ -271,10 +283,11 @@
+ 
+ async function handler(req, res) {
+     if (req.method === "OPTIONS") {
+-        res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type" });
++        res.writeHead(204); // no CORS: browsers must go through the dashboard's server-side proxy
+         return res.end();
+     }
+     const url = new URL(req.url, `http://${req.headers.host}`);
++    if (url.pathname !== "/api/health" && !authorized(req)) return json(res, 401, { error: "unauthorized" });
+     try {
+         await initRunners();
+         if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true, mode: "FUTURES_PAPER", marketType: "USDⓈ-M FUTURES", liveOrdersEnabled: false, running, time: Date.now() });
+@@ -309,6 +322,8 @@
+                 try { input = JSON.parse(body); }
+                 catch { return json(res, 400, { error: "Invalid JSON body" }); }
+             }
++            if (backtestBusy) return json(res, 429, { error: "A backtest is already running" });
++            backtestBusy = true;
+             const result = await runFuturesBacktest({
+                 symbol: input.symbol || "BTCUSDT",
+                 interval: input.interval || "4h",
+@@ -327,7 +342,7 @@
+                 maxTradesPerDay: Number(input.maxTradesPerDay ?? 6),
+                 haltResumeDays: Number(input.haltResumeDays ?? 7),
+                 split: Number(input.split ?? 0.7),
+-            });
++            }).finally(() => { backtestBusy = false; });
+             recordEvent("info", "FUTURES_BACKTEST", `Completed Futures backtest for ${result.config.symbol} (${result.config.candlesUsed} candles)`, { source: "backtest" });
+             return json(res, 200, { success: true, result });
+         }
+diff -ruN a/src/binance.js b/src/binance.js
+--- a/src/binance.js	2026-10-24 16:10:02.017308810 +0000
++++ b/src/binance.js	2026-10-24 16:10:02.022220002 +0000
+@@ -57,7 +57,7 @@
+     const url = `${BASE_URL}/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${safeLimit + 1}`;
+     const data = await request(url);
+     const now = Date.now();
+-    return parseCandles(data).filter(c => c.closeTime <= now).slice(-safeLimit);
++    return parseCandles(data).filter(c => c.closeTime + 2000 <= now).slice(-safeLimit);
+ }
+ 
+ async function getHistoricalCandles(symbol = "BTCUSDT", interval = "15m", totalCandles = 5000) {
+@@ -83,7 +83,7 @@
+     const now = Date.now();
+     const unique = Array.from(new Map(all.map(c => [c.openTime, c])).values());
+     return unique
+-        .filter(c => c.closeTime <= now)
++        .filter(c => c.closeTime + 2000 <= now)
+         .sort((a, b) => a.openTime - b.openTime)
+         .slice(-totalCandles);
+ }
+@@ -133,7 +133,7 @@
+     const url = `${FUTURES_URL}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${safeLimit + 1}`;
+     const data = await request(url);
+     const now = Date.now();
+-    return parseCandles(data).filter(c => c.closeTime <= now).slice(-safeLimit);
++    return parseCandles(data).filter(c => c.closeTime + 2000 <= now).slice(-safeLimit);
+ }
+ 
+ /** Download up to 20,000 most recent CLOSED USDⓈ-M Futures candles using pagination. */
+@@ -153,7 +153,7 @@
+         await sleep(150);
+     }
+     const now = Date.now();
+-    return Array.from(new Map(all.filter(c => c.closeTime <= now).map(c => [c.openTime, c])).values())
++    return Array.from(new Map(all.filter(c => c.closeTime + 2000 <= now).map(c => [c.openTime, c])).values())
+         .sort((a, b) => a.openTime - b.openTime)
+         .slice(-requested);
+ }
+diff -ruN a/src/futuresBacktester.js b/src/futuresBacktester.js
+--- a/src/futuresBacktester.js	2026-10-24 16:10:02.029308810 +0000
++++ b/src/futuresBacktester.js	2026-10-24 16:10:02.034222104 +0000
+@@ -3,6 +3,7 @@
+ const { findStrategy, DEFAULT_STRATEGY } = require("./strategies");
+ const { FuturesEngine, FUTURES_DEFAULTS } = require("./futuresEngine");
+ const { computeMetrics } = require("./metrics");
++const { intervalMs } = require("./data");
+ 
+ const INTERVALS = new Set(["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"]);
+ const SYMBOL_RE = /^[A-Z0-9]{3,30}$/;
+@@ -69,10 +70,12 @@
+         maxConsecutiveLosses: Number(options.maxConsecutiveLosses ?? 3),
+         maxTradesPerDay: Number(options.maxTradesPerDay ?? 6),
+         haltResumeDays: Number(options.haltResumeDays ?? 7),
++        allowShort: options.allowShort ?? process.env.SHORTS === "1",
+         split: Math.max(0.5, Math.min(0.9, Number(options.split ?? 0.7))),
+     };
+     if (!SYMBOL_RE.test(config.symbol)) throw new Error("Invalid symbol");
+     if (!INTERVALS.has(config.interval)) throw new Error("Unsupported candle interval");
++    config.periodsPerYear = config.interval === "1M" ? 12 : Math.round(365 * 86400e3 / intervalMs(config.interval));
+     if (!Number.isFinite(config.startingBalance) || config.startingBalance <= 0) throw new Error("startingBalance must be greater than 0");
+     if (!Number.isFinite(config.leverage) || config.leverage < 1 || config.leverage > 125) throw new Error("leverage must be between 1 and 125");
+     for (const key of ["feeRate", "slippage", "fundingRatePer8h", "riskPercent", "maxPositionPercent", "maintenanceMarginRate"]) {
+diff -ruN a/src/futuresEngine.js b/src/futuresEngine.js
+--- a/src/futuresEngine.js	2026-10-24 16:10:02.041308809 +0000
++++ b/src/futuresEngine.js	2026-10-24 16:10:02.049430122 +0000
+@@ -14,6 +14,7 @@
+     maintenanceMarginRate: 0.005,
+     fundingRatePer8h: 0.0001,    // configurable estimate; real funding rates vary by symbol/time
+     trailing: true,
++    allowShort: true,            // bot/backtest pass SHORTS=1 to opt in; set false for long-only
+     stepSize: null,
+     minQty: 0,
+     minNotional: 5,
+@@ -52,12 +53,10 @@
+             else if (order.type === "OPEN_SHORT" && !this.position) this._open(candle, "SHORT", order.atr);
+             else if (order.type === "CLOSE" && this.position) this._close(this._marketFill(candle.open, this.position.side === "LONG" ? "SELL" : "BUY"), candle.openTime, order.reason);
+         }
++        let liquidated = false;
+         if (this.position) {
+             this._chargeFunding(candle);
+-            if (this.position && this._checkLiquidation(candle)) {
+-                // Liquidation ends this candle's processing; don't evaluate a new entry on the same candle.
+-                return;
+-            }
++            if (this.position && this._checkLiquidation(candle)) liquidated = true;
+             if (this.position) this._checkExits(candle);
+         }
+ 
+@@ -69,10 +68,10 @@
+         this.maxDrawdown = Math.max(this.maxDrawdown, (this.peak - equity) / Math.max(this.peak, 1e-9));
+         for (const msg of this.guard.update(equity, candle.closeTime)) this._emit("GUARD", msg);
+ 
+-        if (analysis && !this.pending) {
++        if (analysis && !this.pending && !liquidated) {
+             if (this.position?.side === "LONG" && analysis.signal === "SELL") this.pending = { type: "CLOSE", reason: "SIGNAL" };
+             else if (this.position?.side === "SHORT" && analysis.signal === "BUY") this.pending = { type: "CLOSE", reason: "SIGNAL" };
+-            else if (!this.position && (analysis.signal === "BUY" || analysis.signal === "SELL")) {
++            else if (!this.position && (analysis.signal === "BUY" || (analysis.signal === "SELL" && this.cfg.allowShort))) {
+                 const gate = this.guard.canOpen(candle.closeTime);
+                 if (!gate.allowed) this._emit("SKIP", `${analysis.signal} signal ignored: ${gate.reason}`);
+                 else this.pending = { type: analysis.signal === "BUY" ? "OPEN_LONG" : "OPEN_SHORT", atr: analysis.indicators?.atr14 };
+diff -ruN a/src/index.js b/src/index.js
+--- a/src/index.js	2026-10-24 16:10:02.055487709 +0000
++++ b/src/index.js	2026-10-24 16:10:02.057189585 +0000
+@@ -40,6 +40,7 @@
+     constructor(symbol) {
+         this.symbol = symbol;
+         this.lastProcessed = null;
++        this.resetToken = null;
+         this.errors = 0;
+         this.stateFile = `data/state_futures_${symbol}_${INTERVAL}_${slug}.json`;
+         this.tradeLog = `data/trades_futures_${symbol}_${INTERVAL}_${slug}.jsonl`;
+@@ -51,6 +52,7 @@
+             fundingRatePer8h: Number(process.env.FUNDING_RATE_8H || 0.0001),
+             riskPercent: Number(process.env.RISK_PERCENT || 0.01),
+             maxPositionPercent: Number(process.env.MAX_MARGIN_PERCENT || 0.25),
++            allowShort: process.env.SHORTS === "1",
+             keepEquityCurve: false,
+             ...strategy.engine,
+             onEvent: e => this.onEvent(e),
+@@ -66,7 +68,7 @@
+     }
+ 
+     persist() {
+-        store.save(this.stateFile, { lastProcessed: this.lastProcessed, engine: this.engine.toJSON() });
++        store.save(this.stateFile, { lastProcessed: this.lastProcessed, resetToken: this.resetToken, engine: this.engine.toJSON() });
+     }
+ 
+     async init(loadFilters = true) {
+@@ -74,12 +76,15 @@
+         if (saved) {
+             this.engine.restore(saved.engine);
+             this.lastProcessed = saved.lastProcessed ?? null;
++            this.resetToken = saved.resetToken ?? null;
+             log(`${this.symbol}: restored state, ${this.engine.trades.length} trades, ${this.engine.position ? "IN POSITION" : "flat"}`);
+         }
+-        if (process.env.RESET_HALT === "1") {
++        // One-shot: applies only when RESET_HALT's value differs from the last one used (e.g. 1, then 2).
++        if (process.env.RESET_HALT && process.env.RESET_HALT !== this.resetToken) {
+             this.engine.guard.resetHalt(this.engine.cash);
++            this.resetToken = process.env.RESET_HALT;
+             this.persist();
+-            log(`${this.symbol}: kill switch manually reset`);
++            log(`${this.symbol}: kill switch manually reset (token ${this.resetToken})`);
+         }
+         if (loadFilters) {
+             try {
+diff -ruN a/test/selftest.js b/test/selftest.js
+--- a/test/selftest.js	2026-10-24 16:10:02.072230106 +0000
++++ b/test/selftest.js	2026-10-24 16:10:02.073308809 +0000
+@@ -255,5 +255,24 @@
+     near(copy.position.margin, e.position.margin);
+     near(copy.cash, e.cash);
+ });
++test("allowShort=false ignores SELL signals while flat (long-only mode)", () => {
++    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, allowShort: false });
++    e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "SELL" });
++    assert.equal(e.pending, null);
++    e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
++    assert.equal(e.position, null);
++    assert.equal(e.trades.length, 0);
++});
++test("liquidation candle still updates equity curve and risk guard", () => {
++    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, feeRate: 0.0005, slippage: 0, maxPositionPercent: 0.25 });
++    e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "BUY" });
++    e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
++    const liq = e.position.liquidationPrice;
++    const before = e.equityCurve.length;
++    e.onCandle(candle(T + 120_000, liq - 2, liq + 1, liq - 3, liq - 1), { ...neutral, signal: "BUY" });
++    assert.equal(e.trades.at(-1).reason, "LIQUIDATION");
++    assert.equal(e.equityCurve.length, before + 1, "equity curve must record the liquidation candle");
++    assert.equal(e.pending, null, "no new entry may be queued on the liquidation candle");
++});
+ 
+ console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}\n`);

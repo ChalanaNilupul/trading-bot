@@ -14,6 +14,7 @@ const DEFAULTS = {
     maintenanceMarginRate: 0.005,
     fundingRatePer8h: 0.0001,    // configurable estimate; real funding rates vary by symbol/time
     trailing: true,
+    allowShort: true,            // bot/backtest pass SHORTS=1 to opt in; set false for long-only
     stepSize: null,
     minQty: 0,
     minNotional: 5,
@@ -52,12 +53,10 @@ class FuturesEngine {
             else if (order.type === "OPEN_SHORT" && !this.position) this._open(candle, "SHORT", order.atr);
             else if (order.type === "CLOSE" && this.position) this._close(this._marketFill(candle.open, this.position.side === "LONG" ? "SELL" : "BUY"), candle.openTime, order.reason);
         }
+        let liquidated = false;
         if (this.position) {
             this._chargeFunding(candle);
-            if (this.position && this._checkLiquidation(candle)) {
-                // Liquidation ends this candle's processing; don't evaluate a new entry on the same candle.
-                return;
-            }
+            if (this.position && this._checkLiquidation(candle)) liquidated = true;
             if (this.position) this._checkExits(candle);
         }
 
@@ -69,10 +68,10 @@ class FuturesEngine {
         this.maxDrawdown = Math.max(this.maxDrawdown, (this.peak - equity) / Math.max(this.peak, 1e-9));
         for (const msg of this.guard.update(equity, candle.closeTime)) this._emit("GUARD", msg);
 
-        if (analysis && !this.pending) {
+        if (analysis && !this.pending && !liquidated) {
             if (this.position?.side === "LONG" && analysis.signal === "SELL") this.pending = { type: "CLOSE", reason: "SIGNAL" };
             else if (this.position?.side === "SHORT" && analysis.signal === "BUY") this.pending = { type: "CLOSE", reason: "SIGNAL" };
-            else if (!this.position && (analysis.signal === "BUY" || analysis.signal === "SELL")) {
+            else if (!this.position && (analysis.signal === "BUY" || (analysis.signal === "SELL" && this.cfg.allowShort))) {
                 const gate = this.guard.canOpen(candle.closeTime);
                 if (!gate.allowed) this._emit("SKIP", `${analysis.signal} signal ignored: ${gate.reason}`);
                 else this.pending = { type: analysis.signal === "BUY" ? "OPEN_LONG" : "OPEN_SHORT", atr: analysis.indicators?.atr14 };

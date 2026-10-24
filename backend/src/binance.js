@@ -57,7 +57,7 @@ async function getCandles(symbol = "BTCUSDT", interval = "15m", limit = 500) {
     const url = `${BASE_URL}/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${safeLimit + 1}`;
     const data = await request(url);
     const now = Date.now();
-    return parseCandles(data).filter(c => c.closeTime <= now).slice(-safeLimit);
+    return parseCandles(data).filter(c => c.closeTime + 2000 <= now).slice(-safeLimit);
 }
 
 async function getHistoricalCandles(symbol = "BTCUSDT", interval = "15m", totalCandles = 5000) {
@@ -83,7 +83,7 @@ async function getHistoricalCandles(symbol = "BTCUSDT", interval = "15m", totalC
     const now = Date.now();
     const unique = Array.from(new Map(all.map(c => [c.openTime, c])).values());
     return unique
-        .filter(c => c.closeTime <= now)
+        .filter(c => c.closeTime + 2000 <= now)
         .sort((a, b) => a.openTime - b.openTime)
         .slice(-totalCandles);
 }
@@ -133,7 +133,7 @@ async function getFuturesCandles(symbol = "BTCUSDT", interval = "15m", limit = 5
     const url = `${FUTURES_URL}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${safeLimit + 1}`;
     const data = await request(url);
     const now = Date.now();
-    return parseCandles(data).filter(c => c.closeTime <= now).slice(-safeLimit);
+    return parseCandles(data).filter(c => c.closeTime + 2000 <= now).slice(-safeLimit);
 }
 
 /** Download up to 20,000 most recent CLOSED USDⓈ-M Futures candles using pagination. */
@@ -153,7 +153,7 @@ async function getFuturesHistoricalCandles(symbol = "BTCUSDT", interval = "4h", 
         await sleep(150);
     }
     const now = Date.now();
-    return Array.from(new Map(all.filter(c => c.closeTime <= now).map(c => [c.openTime, c])).values())
+    return Array.from(new Map(all.filter(c => c.closeTime + 2000 <= now).map(c => [c.openTime, c])).values())
         .sort((a, b) => a.openTime - b.openTime)
         .slice(-requested);
 }

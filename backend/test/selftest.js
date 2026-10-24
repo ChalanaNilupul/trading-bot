@@ -255,5 +255,24 @@ test("futures state serializes and restores isolated margin positions", () => {
     near(copy.position.margin, e.position.margin);
     near(copy.cash, e.cash);
 });
+test("allowShort=false ignores SELL signals while flat (long-only mode)", () => {
+    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, allowShort: false });
+    e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "SELL" });
+    assert.equal(e.pending, null);
+    e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
+    assert.equal(e.position, null);
+    assert.equal(e.trades.length, 0);
+});
+test("liquidation candle still updates equity curve and risk guard", () => {
+    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, feeRate: 0.0005, slippage: 0, maxPositionPercent: 0.25 });
+    e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "BUY" });
+    e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
+    const liq = e.position.liquidationPrice;
+    const before = e.equityCurve.length;
+    e.onCandle(candle(T + 120_000, liq - 2, liq + 1, liq - 3, liq - 1), { ...neutral, signal: "BUY" });
+    assert.equal(e.trades.at(-1).reason, "LIQUIDATION");
+    assert.equal(e.equityCurve.length, before + 1, "equity curve must record the liquidation candle");
+    assert.equal(e.pending, null, "no new entry may be queued on the liquidation candle");
+});
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}\n`);

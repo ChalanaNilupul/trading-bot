@@ -40,6 +40,7 @@ class Runner {
     constructor(symbol) {
         this.symbol = symbol;
         this.lastProcessed = null;
+        this.resetToken = null;
         this.errors = 0;
         this.stateFile = `data/state_futures_${symbol}_${INTERVAL}_${slug}.json`;
         this.tradeLog = `data/trades_futures_${symbol}_${INTERVAL}_${slug}.jsonl`;
@@ -51,6 +52,7 @@ class Runner {
             fundingRatePer8h: Number(process.env.FUNDING_RATE_8H || 0.0001),
             riskPercent: Number(process.env.RISK_PERCENT || 0.01),
             maxPositionPercent: Number(process.env.MAX_MARGIN_PERCENT || 0.25),
+            allowShort: process.env.SHORTS === "1",
             keepEquityCurve: false,
             ...strategy.engine,
             onEvent: e => this.onEvent(e),
@@ -66,7 +68,7 @@ class Runner {
     }
 
     persist() {
-        store.save(this.stateFile, { lastProcessed: this.lastProcessed, engine: this.engine.toJSON() });
+        store.save(this.stateFile, { lastProcessed: this.lastProcessed, resetToken: this.resetToken, engine: this.engine.toJSON() });
     }
 
     async init(loadFilters = true) {
@@ -74,12 +76,15 @@ class Runner {
         if (saved) {
             this.engine.restore(saved.engine);
             this.lastProcessed = saved.lastProcessed ?? null;
+            this.resetToken = saved.resetToken ?? null;
             log(`${this.symbol}: restored state, ${this.engine.trades.length} trades, ${this.engine.position ? "IN POSITION" : "flat"}`);
         }
-        if (process.env.RESET_HALT === "1") {
+        // One-shot: applies only when RESET_HALT's value differs from the last one used (e.g. 1, then 2).
+        if (process.env.RESET_HALT && process.env.RESET_HALT !== this.resetToken) {
             this.engine.guard.resetHalt(this.engine.cash);
+            this.resetToken = process.env.RESET_HALT;
             this.persist();
-            log(`${this.symbol}: kill switch manually reset`);
+            log(`${this.symbol}: kill switch manually reset (token ${this.resetToken})`);
         }
         if (loadFilters) {
             try {

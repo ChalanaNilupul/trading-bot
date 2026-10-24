@@ -3,6 +3,7 @@ const { buildSeries, WARMUP } = require("./indicators");
 const { findStrategy, DEFAULT_STRATEGY } = require("./strategies");
 const { FuturesEngine, FUTURES_DEFAULTS } = require("./futuresEngine");
 const { computeMetrics } = require("./metrics");
+const { intervalMs } = require("./data");
 
 const INTERVALS = new Set(["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"]);
 const SYMBOL_RE = /^[A-Z0-9]{3,30}$/;
@@ -69,10 +70,12 @@ async function runFuturesBacktest(options = {}) {
         maxConsecutiveLosses: Number(options.maxConsecutiveLosses ?? 3),
         maxTradesPerDay: Number(options.maxTradesPerDay ?? 6),
         haltResumeDays: Number(options.haltResumeDays ?? 7),
+        allowShort: options.allowShort ?? process.env.SHORTS === "1",
         split: Math.max(0.5, Math.min(0.9, Number(options.split ?? 0.7))),
     };
     if (!SYMBOL_RE.test(config.symbol)) throw new Error("Invalid symbol");
     if (!INTERVALS.has(config.interval)) throw new Error("Unsupported candle interval");
+    config.periodsPerYear = config.interval === "1M" ? 12 : Math.round(365 * 86400e3 / intervalMs(config.interval));
     if (!Number.isFinite(config.startingBalance) || config.startingBalance <= 0) throw new Error("startingBalance must be greater than 0");
     if (!Number.isFinite(config.leverage) || config.leverage < 1 || config.leverage > 125) throw new Error("leverage must be between 1 and 125");
     for (const key of ["feeRate", "slippage", "fundingRatePer8h", "riskPercent", "maxPositionPercent", "maintenanceMarginRate"]) {
