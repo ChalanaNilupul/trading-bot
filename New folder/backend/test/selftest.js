@@ -3,6 +3,7 @@ const ind = require("../src/indicators");
 const { calculatePosition } = require("../src/riskManager");
 const { RiskGuard } = require("../src/riskGuard");
 const { Engine } = require("../src/engine");
+const { FuturesEngine } = require("../src/futuresEngine");
 const { analysisAt, getStrategyAnalysis } = require("../src/strategy");
 const { generateCandles } = require("../tools/synth");
 const { STRATEGIES, BREAKOUT_VARIANTS, findStrategy } = require("../src/strategies");
@@ -194,6 +195,65 @@ test("state survives save/restore", () => {
 });
 test("deterministic: same data, same result", () => {
     near(runEngine(data).e.cash, runEngine(data).e.cash);
+});
+
+
+console.log("\nUSDⓈ-M Futures paper engine");
+const candle = (t, o, h, l, c) => ({ openTime: t, closeTime: t + 60_000, open: o, high: h, low: l, close: c, volume: 100 });
+const neutral = { signal: "HOLD", indicators: { atr14: 1 } };
+test("futures paper engine opens an isolated leveraged long with stop, target and liquidation price", () => {
+    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, feeRate: 0.0005, slippage: 0, maxPositionPercent: 0.25, minNotional: 5 });
+    e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "BUY" });
+    e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
+    assert.equal(e.position.side, "LONG");
+    assert.equal(e.position.leverage, 5);
+    assert.ok(e.position.margin > 0 && e.position.margin < 1000);
+    assert.ok(e.position.stopPrice < e.position.entryPrice);
+    assert.ok(e.position.targetPrice > e.position.entryPrice);
+    assert.ok(e.position.liquidationPrice < e.position.stopPrice);
+    assert.ok(e.cash < 1000);
+});
+test("futures paper engine opens short on SELL and closes on BUY without live orders", () => {
+    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, feeRate: 0.0005, slippage: 0, maxPositionPercent: 0.25 });
+    e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "SELL" });
+    e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
+    assert.equal(e.position.side, "SHORT");
+    assert.ok(e.position.stopPrice > e.position.entryPrice);
+    assert.ok(e.position.targetPrice < e.position.entryPrice);
+    e.onCandle(candle(T + 120_000, 100, 100.5, 99.5, 100), { ...neutral, signal: "BUY" });
+    e.onCandle(candle(T + 180_000, 99, 99.5, 98.5, 99), neutral);
+    assert.equal(e.position, null);
+    assert.equal(e.trades.length, 1);
+    assert.equal(e.trades[0].side, "SHORT");
+    assert.ok(Number.isFinite(e.trades[0].netPnL));
+});
+test("futures engine simulates isolated liquidation before a stop on a gap candle", () => {
+    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, feeRate: 0.0005, slippage: 0, maxPositionPercent: 0.25 });
+    e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "BUY" });
+    e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
+    const liq = e.position.liquidationPrice;
+    e.onCandle(candle(T + 120_000, liq - 2, liq + 1, liq - 3, liq - 1), neutral);
+    assert.equal(e.position, null);
+    assert.equal(e.trades.at(-1).reason, "LIQUIDATION");
+    assert.ok(e.cash >= 0, "isolated paper wallet must not go negative from liquidation");
+});
+test("futures engine charges estimated funding when an 8-hour boundary is crossed", () => {
+    const nearFunding = Date.UTC(2025, 0, 1, 7, 58);
+    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5, feeRate: 0.0005, slippage: 0, maxPositionPercent: 0.25, fundingRatePer8h: 0.0001 });
+    e.onCandle(candle(nearFunding, 100, 100.5, 99.5, 100), { ...neutral, signal: "BUY" });
+    e.onCandle(candle(nearFunding + 60_000, 100, 101, 99, 100), neutral);
+    e.onCandle(candle(nearFunding + 2 * 60_000, 100, 101, 99, 100), neutral);
+    assert.ok(e.position.fundingPaid > 0);
+});
+test("futures state serializes and restores isolated margin positions", () => {
+    const e = new FuturesEngine({ startingBalance: 1000, leverage: 5 });
+    e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "BUY" });
+    e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
+    const copy = new FuturesEngine({ startingBalance: 1000, leverage: 5 });
+    copy.restore(JSON.parse(JSON.stringify(e.toJSON())));
+    assert.equal(copy.position.side, "LONG");
+    near(copy.position.margin, e.position.margin);
+    near(copy.cash, e.cash);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}\n`);

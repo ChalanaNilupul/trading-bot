@@ -1,4 +1,5 @@
 const BASE_URL = "https://api.binance.com";
+const FUTURES_URL = "https://fapi.binance.com";
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function parseCandles(data) {
@@ -125,4 +126,56 @@ async function getSymbolFilters(symbol) {
     };
 }
 
-module.exports = { getCandles, getHistoricalCandles, getTickers24h, getTopUSDTSymbols, getSymbolFilters };
+
+/** USDⓈ-M Futures public market data. These endpoints never place orders. */
+async function getFuturesCandles(symbol = "BTCUSDT", interval = "15m", limit = 500) {
+    const safeLimit = Math.min(Math.max(limit, 1), 1000);
+    const url = `${FUTURES_URL}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${safeLimit + 1}`;
+    const data = await request(url);
+    const now = Date.now();
+    return parseCandles(data).filter(c => c.closeTime <= now).slice(-safeLimit);
+}
+
+/** Download up to 20,000 most recent CLOSED USDⓈ-M Futures candles using pagination. */
+async function getFuturesHistoricalCandles(symbol = "BTCUSDT", interval = "4h", totalCandles = 5000) {
+    const requested = Math.max(1, Math.min(20000, Math.floor(Number(totalCandles) || 5000)));
+    const all = [];
+    let endTime = Date.now();
+    while (all.length < requested) {
+        const batchSize = Math.min(1000, requested - all.length);
+        const url = `${FUTURES_URL}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${batchSize}&endTime=${endTime}`;
+        const data = await request(url, { timeoutMs: 20000 });
+        if (!Array.isArray(data) || data.length === 0) break;
+        const batch = parseCandles(data);
+        all.unshift(...batch);
+        endTime = batch[0].openTime - 1;
+        if (data.length < batchSize) break;
+        await sleep(150);
+    }
+    const now = Date.now();
+    return Array.from(new Map(all.filter(c => c.closeTime <= now).map(c => [c.openTime, c])).values())
+        .sort((a, b) => a.openTime - b.openTime)
+        .slice(-requested);
+}
+
+async function getFuturesTickers24h() {
+    return request(`${FUTURES_URL}/fapi/v1/ticker/24hr`, { timeoutMs: 20000 });
+}
+
+async function getFuturesSymbolFilters(symbol) {
+    const info = await request(`${FUTURES_URL}/fapi/v1/exchangeInfo?symbol=${encodeURIComponent(symbol)}`);
+    const s = info.symbols?.[0];
+    if (!s) throw new Error(`Futures symbol not found: ${symbol}`);
+    const lot = s.filters.find(f => f.filterType === "LOT_SIZE");
+    const marketLot = s.filters.find(f => f.filterType === "MARKET_LOT_SIZE") || lot;
+    const notional = s.filters.find(f => f.filterType === "MIN_NOTIONAL" || f.filterType === "NOTIONAL");
+    const price = s.filters.find(f => f.filterType === "PRICE_FILTER");
+    return {
+        stepSize: marketLot ? Number(marketLot.stepSize) : (lot ? Number(lot.stepSize) : null),
+        minQty: marketLot ? Number(marketLot.minQty) : (lot ? Number(lot.minQty) : 0),
+        minNotional: notional ? Number(notional.notional ?? notional.minNotional ?? 0) : 5,
+        tickSize: price ? Number(price.tickSize) : null,
+    };
+}
+
+module.exports = { getCandles, getHistoricalCandles, getTickers24h, getTopUSDTSymbols, getSymbolFilters, getFuturesCandles, getFuturesHistoricalCandles, getFuturesTickers24h, getFuturesSymbolFilters };

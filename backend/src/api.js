@@ -1,10 +1,10 @@
 const http = require("http");
-const { getTickers24h, getCandles, getSymbolFilters } = require("./binance");
+const { getFuturesTickers24h, getFuturesCandles, getFuturesSymbolFilters } = require("./binance");
 const { buildSeries, WARMUP } = require("./indicators");
 const store = require("./store");
 const { computeMetrics } = require("./metrics");
-const { Runner, SYMBOLS, INTERVAL, POLL_SECONDS, START_BALANCE, strategy } = require("./index");
-const { runBacktest } = require("./backtester");
+const { Runner, SYMBOLS, INTERVAL, POLL_SECONDS, START_BALANCE, RUNNER_BALANCE, LEVERAGE, strategy } = require("./index");
+const { runFuturesBacktest } = require("./futuresBacktester");
 
 const PORT = Number(process.env.API_PORT || 4000);
 const HOST = process.env.API_HOST || "127.0.0.1";
@@ -59,7 +59,7 @@ async function initRunners(loadFilters = false) {
 async function refreshTickers() {
     const now = Date.now();
     if (now - tickerCache.at < 15000) return tickerCache.data;
-    const rows = await getTickers24h();
+    const rows = await getFuturesTickers24h();
     lastSuccessfulBinanceAt = Date.now();
     lastBinanceError = null;
     recordEvent("info", "BINANCE", `Fetched 24h ticker data (${rows.length} symbols)`, { source: "binance" });
@@ -90,21 +90,28 @@ function runnerSnapshot(runner) {
     const dailyStart = g.dayStartEquity || equity;
     const dailyPnlPct = dailyStart ? ((equity / dailyStart) - 1) * 100 : 0;
     const position = e.position ? {
-        side: "LONG",
+        side: e.position.side,
         entryTime: e.position.entryTime,
         entryPrice: e.position.entryPrice,
         quantity: e.position.quantity,
         currentPrice: price,
         stopPrice: e.position.stopPrice,
         initialStop: e.position.initialStop,
+        unrealizedPnl: e.unrealized(price),
+        margin: e.position.margin,
+        leverage: e.position.leverage,
+        liquidationPrice: e.position.liquidationPrice,
         targetPrice: e.position.targetPrice,
-        unrealizedPnl: e.position.quantity * price - e.position.entryValue,
+        fundingPaid: e.position.fundingPaid,
     } : null;
     return {
         symbol: runner.symbol,
         price,
         equity,
         cash: e.cash,
+        startingBalance: e.cfg.startingBalance,
+        usedMargin: e.usedMargin(),
+        freeCollateral: e.freeCollateral(price),
         returnPct: ((equity / e.cfg.startingBalance) - 1) * 100,
         lastProcessed: runner.lastProcessed,
         lastNote: runner.lastNote,
@@ -133,7 +140,7 @@ async function scanMarkets() {
     const output = [];
     for (const symbol of SYMBOLS) {
         try {
-            const candles = await getCandles(symbol, INTERVAL, 300);
+            const candles = await getFuturesCandles(symbol, INTERVAL, 300);
             lastSuccessfulBinanceAt = Date.now();
             lastBinanceError = null;
             if (candles.length < WARMUP + 1) continue;
@@ -174,12 +181,17 @@ function allTrades() {
 
 function aggregate() {
     const snapshots = runners.map(runnerSnapshot);
-    const starting = snapshots.reduce((s, x) => s + START_BALANCE, 0);
+    const starting = snapshots.reduce((s, x) => s + x.startingBalance, 0);
     const equity = snapshots.reduce((s, x) => s + x.equity, 0);
     const trades = allTrades();
     const metrics = computeMetrics({ trades, startingBalance: starting });
     return {
-        mode: "PAPER",
+        mode: "FUTURES_PAPER",
+        marketType: "USDⓈ-M FUTURES",
+        marginMode: "ISOLATED",
+        leverage: LEVERAGE,
+        liveOrdersEnabled: false,
+        accountingModel: "ISOLATED_MARGIN_PER_SYMBOL_ACCOUNT",
         running,
         strategy: strategy.name,
         interval: INTERVAL,
@@ -230,14 +242,14 @@ async function startBot() {
     await initRunners(false);
     if (!filtersLoaded) {
         for (const r of runners) {
-            try { Object.assign(r.engine.cfg, await getSymbolFilters(r.symbol)); }
+            try { Object.assign(r.engine.cfg, await getFuturesSymbolFilters(r.symbol)); }
             catch (e) { console.error(`${r.symbol}: filters failed: ${e.message}`); }
         }
         filtersLoaded = true;
     }
     if (!running) {
         running = true;
-        recordEvent("info", "BOT_START", `Paper engine started: ${strategy.name}, ${INTERVAL}, ${SYMBOLS.length} symbols`, { source: "system" });
+        recordEvent("info", "BOT_START", `Futures paper engine started: ${strategy.name}, ${INTERVAL}, ${LEVERAGE}x isolated, ${SYMBOLS.length} symbols; live orders disabled`, { source: "system" });
         botLoop();
     }
 }
@@ -265,17 +277,17 @@ async function handler(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     try {
         await initRunners();
-        if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true, mode: "PAPER", running, time: Date.now() });
+        if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true, mode: "FUTURES_PAPER", marketType: "USDⓈ-M FUTURES", liveOrdersEnabled: false, running, time: Date.now() });
         if (req.method === "GET" && url.pathname === "/api/events") {
             const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") || 80)));
             const after = Number(url.searchParams.get("after") || 0);
             return json(res, 200, {
                 events: events.filter(event => event.id > after).slice(-limit).reverse(),
                 latestId: eventSequence,
-                telemetry: { lastSuccessfulBinanceAt, lastCandleAt, lastBinanceError, running, mode: "PAPER" },
+                telemetry: { lastSuccessfulBinanceAt, lastCandleAt, lastBinanceError, running, mode: "FUTURES_PAPER" },
             });
         }
-        if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, { ...aggregate(), telemetry: { lastSuccessfulBinanceAt, lastCandleAt, lastBinanceError, mode: "PAPER" } });
+        if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, { ...aggregate(), telemetry: { lastSuccessfulBinanceAt, lastCandleAt, lastBinanceError, mode: "FUTURES_PAPER" } });
         if (req.method === "GET" && url.pathname === "/api/positions") return json(res, 200, runners.map(runnerSnapshot).filter(x => x.position));
         if (req.method === "GET" && url.pathname === "/api/trades") return json(res, 200, allTrades().slice(0, 100));
         if (req.method === "GET" && url.pathname === "/api/markets") return json(res, 200, { strategy: strategy.name, interval: INTERVAL, markets: await scanMarkets() });
@@ -287,43 +299,38 @@ async function handler(req, res) {
             return json(res, 200, { ok: true });
         }
         if (req.method === "POST" && url.pathname === "/api/backtest") {
-    let body = "";
-
-    for await (const chunk of req) {
-        body += chunk;
-    }
-
-    let input = {};
-
-    if (body) {
-        try {
-            input = JSON.parse(body);
-        } catch {
-            return json(res, 400, {
-                error: "Invalid JSON body",
+            let body = "";
+            for await (const chunk of req) {
+                body += chunk;
+                if (body.length > 64 * 1024) return json(res, 413, { error: "Request body too large" });
+            }
+            let input = {};
+            if (body) {
+                try { input = JSON.parse(body); }
+                catch { return json(res, 400, { error: "Invalid JSON body" }); }
+            }
+            const result = await runFuturesBacktest({
+                symbol: input.symbol || "BTCUSDT",
+                interval: input.interval || "4h",
+                candles: Number(input.candles ?? 5000),
+                strategy: input.strategy || strategy.name,
+                startingBalance: Number(input.startingBalance ?? START_BALANCE),
+                leverage: Number(input.leverage ?? LEVERAGE),
+                feeRate: Number(input.feeRate ?? process.env.FEE_RATE ?? 0.0005),
+                slippage: Number(input.slippage ?? process.env.SLIPPAGE ?? 0.0005),
+                fundingRatePer8h: Number(input.fundingRatePer8h ?? process.env.FUNDING_RATE_8H ?? 0.0001),
+                riskPercent: Number(input.riskPercent ?? process.env.RISK_PERCENT ?? 0.01),
+                maxPositionPercent: Number(input.maxPositionPercent ?? process.env.MAX_MARGIN_PERCENT ?? 0.25),
+                maxDailyLossPct: Number(input.maxDailyLossPct ?? 0.03),
+                maxDrawdownPct: Number(input.maxDrawdownPct ?? 0.10),
+                maxConsecutiveLosses: Number(input.maxConsecutiveLosses ?? 3),
+                maxTradesPerDay: Number(input.maxTradesPerDay ?? 6),
+                haltResumeDays: Number(input.haltResumeDays ?? 7),
+                split: Number(input.split ?? 0.7),
             });
+            recordEvent("info", "FUTURES_BACKTEST", `Completed Futures backtest for ${result.config.symbol} (${result.config.candlesUsed} candles)`, { source: "backtest" });
+            return json(res, 200, { success: true, result });
         }
-    }
-
-    const result = await runBacktest({
-        symbol: input.symbol || "ETHUSDT",
-        interval: input.interval || "15m",
-        candles: Number(input.candles || 10000),
-        feeRate: Number(input.feeRate ?? 0.001),
-        slippage: Number(input.slippage ?? 0.0005),
-        trailing: input.trailing !== false,
-        split: Number(input.split || 0.7),
-        haltResumeDays: Number(
-            input.haltResumeDays ?? 7
-        ),
-        refresh: input.refresh === true,
-    });
-
-    return json(res, 200, {
-        success: true,
-        result,
-    });
-}
         return json(res, 404, { error: "Not found" });
     } catch (error) {
         recordEvent("error", "API_ERROR", error.message, { source: "api" });
@@ -334,7 +341,7 @@ async function handler(req, res) {
 
 const server = http.createServer(handler);
 server.listen(PORT, HOST, () => {
-    recordEvent("info", "API_READY", `TradeLab API listening on http://${HOST}:${PORT}; paper mode only`, { source: "system" });
+    recordEvent("info", "API_READY", `TradeLab API listening on http://${HOST}:${PORT}; Futures paper mode only; live orders disabled`, { source: "system" });
     console.log(`TradeLab API listening on http://${HOST}:${PORT}`);
 });
 if (process.env.AUTOSTART === "1") startBot().catch(error => {

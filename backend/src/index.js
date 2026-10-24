@@ -12,10 +12,10 @@
  *   RESET_HALT=1   clear a tripped kill switch after you've reviewed why it fired
  *   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID   optional alerts
  */
-const { getCandles, getSymbolFilters } = require("./binance");
+const { getFuturesCandles, getFuturesSymbolFilters } = require("./binance");
 const { buildSeries, WARMUP } = require("./indicators");
 const { findStrategy, DEFAULT_STRATEGY } = require("./strategies");
-const { Engine } = require("./engine");
+const { FuturesEngine } = require("./futuresEngine");
 const { computeMetrics } = require("./metrics");
 const store = require("./store");
 const { notify } = require("./notify");
@@ -25,6 +25,8 @@ const SYMBOLS = (process.env.SYMBOLS || process.env.SYMBOL || DEFAULT_SYMBOLS).s
 const INTERVAL = process.env.INTERVAL || "4h";
 const POLL_SECONDS = Number(process.env.POLL_SECONDS || 60);
 const START_BALANCE = Number(process.env.START_BALANCE || 1000);
+const LEVERAGE = Number(process.env.LEVERAGE || 5);
+const RUNNER_BALANCE = START_BALANCE / SYMBOLS.length;
 const ONE_SHOT = process.env.ONE_SHOT === "1";
 
 const strategy = findStrategy(process.env.STRATEGY || DEFAULT_STRATEGY);
@@ -39,10 +41,16 @@ class Runner {
         this.symbol = symbol;
         this.lastProcessed = null;
         this.errors = 0;
-        this.stateFile = `data/state_${symbol}_${INTERVAL}_${slug}.json`;
-        this.tradeLog = `data/trades_${symbol}_${INTERVAL}_${slug}.jsonl`;
-        this.engine = new Engine({
-            startingBalance: START_BALANCE,
+        this.stateFile = `data/state_futures_${symbol}_${INTERVAL}_${slug}.json`;
+        this.tradeLog = `data/trades_futures_${symbol}_${INTERVAL}_${slug}.jsonl`;
+        this.engine = new FuturesEngine({
+            startingBalance: RUNNER_BALANCE,
+            leverage: LEVERAGE,
+            feeRate: Number(process.env.FEE_RATE || 0.0005),
+            slippage: Number(process.env.SLIPPAGE || 0.0005),
+            fundingRatePer8h: Number(process.env.FUNDING_RATE_8H || 0.0001),
+            riskPercent: Number(process.env.RISK_PERCENT || 0.01),
+            maxPositionPercent: Number(process.env.MAX_MARGIN_PERCENT || 0.25),
             keepEquityCurve: false,
             ...strategy.engine,
             onEvent: e => this.onEvent(e),
@@ -75,7 +83,7 @@ class Runner {
         }
         if (loadFilters) {
             try {
-                Object.assign(this.engine.cfg, await getSymbolFilters(this.symbol));
+                Object.assign(this.engine.cfg, await getFuturesSymbolFilters(this.symbol));
             } catch (error) {
                 log(`${this.symbol}: could not load exchange filters (${error.message}); continuing without them`);
             }
@@ -83,7 +91,7 @@ class Runner {
     }
 
     async tick() {
-        const candles = await getCandles(this.symbol, INTERVAL, 500);
+        const candles = await getFuturesCandles(this.symbol, INTERVAL, 500);
         if (candles.length < WARMUP + 1) {
             log(`${this.symbol}: not enough candle data`);
             return false;
@@ -116,7 +124,7 @@ class Runner {
         const price = this.lastPrice ?? 0;
         const eq = e.equity(price);
         const g = e.guard.state;
-        const pos = e.position ? `LONG ${e.position.quantity} @ ${e.position.entryPrice.toFixed(4)} SL ${e.position.stopPrice.toFixed(4)}` : e.pending ? `flat (queued ${e.pending.type})` : "flat";
+        const pos = e.position ? `${e.position.side} ${e.position.quantity} @ ${e.position.entryPrice.toFixed(4)} SL ${e.position.stopPrice.toFixed(4)} LIQ ${e.position.liquidationPrice.toFixed(4)}` : e.pending ? `flat (queued ${e.pending.type})` : "flat";
         const guard = g.halted ? "HALTED" : g.dayBlocked ? "day-limit" : "ok";
         return `${this.symbol.padEnd(10)} ${pos.padEnd(46)} equity $${eq.toFixed(2).padStart(8)} (${(((eq / e.cfg.startingBalance) - 1) * 100).toFixed(1).padStart(5)}%)  trades ${String(m.trades).padStart(3)}  PF ${fmtPF(m.profitFactor).padStart(4)}  guard ${guard}`;
     }
@@ -136,7 +144,7 @@ function printSummary(runners) {
 }
 
 async function main() {
-    log(`Strategy: ${strategy.name} | ${INTERVAL} | coins: ${SYMBOLS.join(", ")}`);
+    log(`Mode: FUTURES PAPER (no live orders) | ${LEVERAGE}x isolated | total wallet: ${START_BALANCE} USDT (${RUNNER_BALANCE.toFixed(2)} per symbol account) | Strategy: ${strategy.name} | ${INTERVAL} | coins: ${SYMBOLS.join(", ")}`);
     const runners = SYMBOLS.map(s => new Runner(s));
     for (const r of runners) await r.init();
 
@@ -171,4 +179,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { Runner, SYMBOLS, INTERVAL, POLL_SECONDS, START_BALANCE, strategy };
+module.exports = { Runner, SYMBOLS, INTERVAL, POLL_SECONDS, START_BALANCE, RUNNER_BALANCE, LEVERAGE, strategy };

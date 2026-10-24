@@ -119,6 +119,10 @@ type Market = {
 
 type Trade = {
   symbol: string;
+  side?: "LONG" | "SHORT";
+  leverage?: number;
+  margin?: number;
+  funding?: number;
   entryTime: number;
   exitTime: number;
   entryPrice: number;
@@ -207,7 +211,12 @@ const price = (n: number) =>
     maximumFractionDigits: n < 10 ? 4 : 2,
   })}`;
 
-const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+const pct = (n: number | null | undefined) => {
+  const value = Number(n ?? 0);
+  if (!Number.isFinite(value)) return "0.00%";
+
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+};
 
 const time = (ms: number) =>
   new Date(ms).toLocaleString([], {
@@ -341,7 +350,7 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [s, m, t] = await Promise.all([
+      const [s, m, t, e] = await Promise.all([
         fetch(`${API}/api/status`, {
           cache: "no-store",
         }).then((r) => r.json()),
@@ -1031,7 +1040,7 @@ export default function Dashboard() {
                   </td>
 
                   <td className="px-4 py-4 text-zinc-400">
-                    {r.position ? "LONG" : "FLAT"}
+                    {r.position ? r.position.side || "OPEN" : "FLAT"}
                   </td>
 
                   <td className="px-4 py-4">
@@ -1310,6 +1319,8 @@ export default function Dashboard() {
           description="Test your strategy against historical Binance candles."
           icon={BarChart3}
         />
+
+        {/* <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-sm text-amber-200">Note: the backend backtest endpoint is still the legacy backtester, not the new Futures paper engine. Do not interpret these results as Futures backtest results.</div> */}
 
         {/* CONFIGURATION */}
         <section className="glass rounded-2xl p-5">
@@ -2705,46 +2716,89 @@ function OperationsMonitor({
             description="Timestamped events emitted by the backend. This is paper trading only; no real Binance orders are sent."
           />
         </div>
-        <span className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${status?.running ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-amber-400/20 bg-amber-400/10 text-amber-300"}`}>
+        <span
+          className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${status?.running ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-amber-400/20 bg-amber-400/10 text-amber-300"}`}
+        >
           {status?.running ? "PAPER ENGINE RUNNING" : "PAPER ENGINE STOPPED"}
         </span>
       </div>
 
       <div className="grid gap-3 border-b border-white/6 p-4 sm:grid-cols-3">
         <div className="rounded-xl border border-white/6 bg-white/[.02] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Last Binance data success</div>
-          <div className="mt-2 text-xs text-zinc-200">{formatTime(lastSuccess)}</div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+            Last Binance data success
+          </div>
+          <div className="mt-2 text-xs text-zinc-200">
+            {formatTime(lastSuccess)}
+          </div>
         </div>
         <div className="rounded-xl border border-white/6 bg-white/[.02] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Last processed candle</div>
-          <div className="mt-2 text-xs text-zinc-200">{formatTime(lastCandle)}</div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+            Last processed candle
+          </div>
+          <div className="mt-2 text-xs text-zinc-200">
+            {formatTime(lastCandle)}
+          </div>
         </div>
         <div className="rounded-xl border border-white/6 bg-white/[.02] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Latest API/data error</div>
-          <div className={`mt-2 line-clamp-2 text-xs ${error ? "text-red-300" : "text-emerald-300"}`}>{error ? `${formatTime(error.at)} — ${error.message}` : "No recorded data errors"}</div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+            Latest API/data error
+          </div>
+          <div
+            className={`mt-2 line-clamp-2 text-xs ${error ? "text-red-300" : "text-emerald-300"}`}
+          >
+            {error
+              ? `${formatTime(error.at)} — ${error.message}`
+              : "No recorded data errors"}
+          </div>
         </div>
       </div>
 
       <div className="flex items-center justify-between border-b border-white/5 px-5 py-3">
-        <div className="flex items-center gap-2 text-xs font-medium text-zinc-300"><Terminal size={14} /> Runtime event feed</div>
-        <div className="text-[10px] text-zinc-600">Refreshes with dashboard · newest first</div>
+        <div className="flex items-center gap-2 text-xs font-medium text-zinc-300">
+          <Terminal size={14} /> Runtime event feed
+        </div>
+        <div className="text-[10px] text-zinc-600">
+          Refreshes with dashboard · newest first
+        </div>
       </div>
       <div className="max-h-[420px] overflow-y-auto">
         {events.length === 0 ? (
-          <div className="p-8 text-center text-xs leading-5 text-zinc-500">No backend events recorded yet. Start the paper engine to see fetches, candle evaluations, signals, risk decisions and trade events here.</div>
-        ) : events.map((event) => (
-          <div key={event.id} className="flex gap-3 border-b border-white/[.035] px-5 py-3 last:border-0">
-            <div className={`mt-1 h-2 w-2 shrink-0 rounded-full ${event.level === "error" ? "bg-red-400" : event.level === "warn" ? "bg-amber-400" : event.level === "trade" ? "bg-indigo-400" : "bg-emerald-400"}`} />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-bold tracking-wider text-zinc-400">{event.category}</span>
-                {event.symbol && <span className="text-[10px] text-zinc-600">{event.symbol}</span>}
-                <span className="ml-auto text-[10px] tabular-nums text-zinc-600">{new Date(event.timestamp).toLocaleTimeString()}</span>
-              </div>
-              <p className="mt-1 break-words text-xs leading-5 text-zinc-300">{event.message}</p>
-            </div>
+          <div className="p-8 text-center text-xs leading-5 text-zinc-500">
+            No backend events recorded yet. Start the paper engine to see
+            fetches, candle evaluations, signals, risk decisions and trade
+            events here.
           </div>
-        ))}
+        ) : (
+          events.map((event) => (
+            <div
+              key={event.id}
+              className="flex gap-3 border-b border-white/[.035] px-5 py-3 last:border-0"
+            >
+              <div
+                className={`mt-1 h-2 w-2 shrink-0 rounded-full ${event.level === "error" ? "bg-red-400" : event.level === "warn" ? "bg-amber-400" : event.level === "trade" ? "bg-indigo-400" : "bg-emerald-400"}`}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-bold tracking-wider text-zinc-400">
+                    {event.category}
+                  </span>
+                  {event.symbol && (
+                    <span className="text-[10px] text-zinc-600">
+                      {event.symbol}
+                    </span>
+                  )}
+                  <span className="ml-auto text-[10px] tabular-nums text-zinc-600">
+                    {new Date(event.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+                <p className="mt-1 break-words text-xs leading-5 text-zinc-300">
+                  {event.message}
+                </p>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </section>
   );
@@ -2860,7 +2914,11 @@ function PositionCard({ position: p }: { position: Runner }) {
         <div>
           <div className="font-medium">{p.symbol}</div>
 
-          <div className="mt-1 text-xs text-emerald-400">LONG</div>
+          <div
+            className={`mt-1 text-xs ${pos.side === "SHORT" ? "text-rose-400" : "text-emerald-400"}`}
+          >
+            {pos.side || "OPEN"} · {pos.leverage || 5}×
+          </div>
         </div>
 
         <div
@@ -2874,7 +2932,7 @@ function PositionCard({ position: p }: { position: Runner }) {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-4 gap-3 text-xs">
+      <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
         <PositionValue label="Entry" value={price(pos.entryPrice)} />
 
         <PositionValue label="Current" value={price(pos.currentPrice)} />
@@ -2882,6 +2940,14 @@ function PositionCard({ position: p }: { position: Runner }) {
         <PositionValue label="Stop" value={price(pos.stopPrice)} red />
 
         <PositionValue label="Target" value={price(pos.targetPrice)} green />
+
+        <PositionValue label="Isolated margin" value={money(pos.margin || 0)} />
+
+        <PositionValue
+          label="Liquidation est."
+          value={price(pos.liquidationPrice)}
+          red
+        />
       </div>
     </div>
   );
@@ -2945,7 +3011,11 @@ function RecentTrades({ trades }: { trades: Trade[] }) {
               <div>
                 <div className="text-sm font-medium">
                   {t.symbol}
-                  <span className="ml-1 text-[10px] text-zinc-600">LONG</span>
+                  <span
+                    className={`ml-1 text-[10px] ${t.side === "SHORT" ? "text-rose-400" : "text-zinc-500"}`}
+                  >
+                    {t.side || "TRADE"}
+                  </span>
                 </div>
 
                 <div className="mt-0.5 text-xs text-zinc-600">
