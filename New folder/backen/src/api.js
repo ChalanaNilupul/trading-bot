@@ -8,17 +8,6 @@ const { runBacktest } = require("./backtester");
 
 const PORT = Number(process.env.API_PORT || 4000);
 const HOST = process.env.API_HOST || "127.0.0.1";
-const MARKET_TYPE = String(process.env.MARKET_TYPE || "SPOT_PAPER").toUpperCase();
-const API_TOKEN = process.env.API_TOKEN || "";
-const ALLOWED_ORIGINS = new Set((process.env.API_CORS_ORIGINS || "http://localhost:3000,http://127.0.0.1:3000")
-    .split(",").map(value => value.trim()).filter(Boolean));
-const isLoopback = HOST === "127.0.0.1" || HOST === "localhost" || HOST === "::1";
-if (MARKET_TYPE !== "SPOT_PAPER") {
-    throw new Error(`Unsupported MARKET_TYPE=${MARKET_TYPE}. This backend only implements SPOT_PAPER; futures require a separate futures simulator and risk model.`);
-}
-if (!isLoopback && !API_TOKEN) {
-    throw new Error("Refusing to bind the trading API to a non-loopback host without API_TOKEN. Keep API_HOST=127.0.0.1 for local use.");
-}
 
 let running = false;
 let loopPromise = null;
@@ -27,6 +16,26 @@ let lastPrices = new Map();
 let tickerCache = { at: 0, data: new Map() };
 let marketCache = { at: 0, data: [] };
 let filtersLoaded = false;
+const MAX_EVENTS = 500;
+let eventSequence = 0;
+const events = [];
+let lastSuccessfulBinanceAt = null;
+let lastCandleAt = null;
+let lastBinanceError = null;
+
+function recordEvent(level, category, message, details = {}) {
+    const event = {
+        id: ++eventSequence,
+        timestamp: Date.now(),
+        level,
+        category,
+        message: String(message).slice(0, 500),
+        ...details,
+    };
+    events.push(event);
+    if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
+    return event;
+}
 
 function createRunners() {
     return SYMBOLS.map(symbol => new Runner(symbol));
@@ -35,13 +44,25 @@ function createRunners() {
 async function initRunners(loadFilters = false) {
     if (runners.length) return;
     runners = createRunners();
-    for (const runner of runners) await runner.init(loadFilters);
+    for (const runner of runners) {
+        const originalOnEvent = runner.onEvent.bind(runner);
+        runner.onEvent = event => {
+            originalOnEvent(event);
+            const level = event.type === "SKIP" || event.type === "GUARD" ? "warn" : event.type === "EXIT" || event.type === "ENTRY" ? "trade" : "info";
+            recordEvent(level, event.type, `${runner.symbol}: ${event.message}`, { symbol: runner.symbol, source: "paper-engine" });
+        };
+        await runner.init(loadFilters);
+    }
+    recordEvent("info", "SYSTEM", `Initialized ${runners.length} paper runner(s)`, { source: "system" });
 }
 
 async function refreshTickers() {
     const now = Date.now();
     if (now - tickerCache.at < 15000) return tickerCache.data;
     const rows = await getTickers24h();
+    lastSuccessfulBinanceAt = Date.now();
+    lastBinanceError = null;
+    recordEvent("info", "BINANCE", `Fetched 24h ticker data (${rows.length} symbols)`, { source: "binance" });
     const map = new Map();
     for (const row of rows) {
         const symbol = String(row.symbol || "");
@@ -113,12 +134,16 @@ async function scanMarkets() {
     for (const symbol of SYMBOLS) {
         try {
             const candles = await getCandles(symbol, INTERVAL, 300);
+            lastSuccessfulBinanceAt = Date.now();
+            lastBinanceError = null;
             if (candles.length < WARMUP + 1) continue;
             const series = buildSeries(candles);
             const ctx = strategy.prepare(candles, series);
             const i = candles.length - 1;
             const analysis = strategy.analyze(ctx, candles, series, i);
             const ticker = tickers.get(symbol) || {};
+            lastCandleAt = candles[i].closeTime;
+            recordEvent("info", "SCAN", `${symbol} ${analysis.signal} signal (${analysis.score}/${analysis.maxScore}) on ${INTERVAL} candle`, { symbol, source: "market-scanner", candleTime: candles[i].closeTime });
             output.push({
                 symbol,
                 price: Number(ticker.price ?? analysis.price ?? candles[i].close),
@@ -133,6 +158,8 @@ async function scanMarkets() {
                 blockers: analysis.blockers || [],
             });
         } catch (error) {
+            lastBinanceError = { at: Date.now(), message: error.message };
+            recordEvent("error", "BINANCE_ERROR", `${symbol} market scan failed: ${error.message}`, { symbol, source: "market-scanner" });
             output.push({ symbol, error: error.message });
         }
     }
@@ -152,23 +179,14 @@ function aggregate() {
     const trades = allTrades();
     const metrics = computeMetrics({ trades, startingBalance: starting });
     return {
-        mode: "PAPER_SPOT_LONG_ONLY",
-        marketType: "SPOT",
-        futuresSupported: false,
-        liveOrdersEnabled: false,
+        mode: "PAPER",
         running,
         strategy: strategy.name,
         interval: INTERVAL,
         symbols: SYMBOLS,
         pollSeconds: POLL_SECONDS,
         updatedAt: Date.now(),
-        portfolio: {
-            startingBalance: starting,
-            equity,
-            returnPct: starting > 0 ? ((equity / starting) - 1) * 100 : 0,
-            accountingModel: "INDEPENDENT_PAPER_ACCOUNTS",
-            note: "Each symbol runner currently has its own simulated balance; this is not a shared futures portfolio.",
-        },
+        portfolio: { startingBalance: starting, equity, returnPct: ((equity / starting) - 1) * 100 },
         metrics,
         runners: snapshots,
     };
@@ -179,10 +197,17 @@ async function tickOnce() {
     let changed = false;
     for (const runner of runners) {
         try {
-            if (await runner.tick()) changed = true;
+            const hadNewCandle = await runner.tick();
+            if (hadNewCandle) changed = true;
             runner.errors = 0;
+            lastSuccessfulBinanceAt = Date.now();
+            lastBinanceError = null;
+            recordEvent("info", "BINANCE", `${runner.symbol}: candle data fetched; ${hadNewCandle ? "new closed candle processed" : "no new closed candle"}`, { symbol: runner.symbol, source: "paper-engine", candleTime: runner.lastProcessed });
+            if (hadNewCandle) recordEvent("info", "STRATEGY", `${runner.symbol}: ${runner.lastNote}`, { symbol: runner.symbol, source: "paper-engine", candleTime: runner.lastProcessed });
         } catch (error) {
             runner.errors += 1;
+            lastBinanceError = { at: Date.now(), message: error.message };
+            recordEvent("error", "FETCH_ERROR", `${runner.symbol}: ${error.message} (consecutive errors: ${runner.errors})`, { symbol: runner.symbol, source: "paper-engine" });
             console.error(`${runner.symbol}: ${error.message}`);
         }
     }
@@ -210,112 +235,109 @@ async function startBot() {
         }
         filtersLoaded = true;
     }
-    if (!running) { running = true; botLoop(); }
+    if (!running) {
+        running = true;
+        recordEvent("info", "BOT_START", `Paper engine started: ${strategy.name}, ${INTERVAL}, ${SYMBOLS.length} symbols`, { source: "system" });
+        botLoop();
+    }
 }
 
 function stopBot() {
     running = false;
+    recordEvent("warn", "BOT_STOP", "Paper engine stop requested; saving runner state", { source: "system" });
     runners.forEach(r => r.persist());
 }
 
-async function json(res, status, body, req) {
-    const origin = req?.headers?.origin;
-    const headers = {
+async function json(res, status, body) {
+    res.writeHead(status, {
         "Content-Type": "application/json; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
         "Cache-Control": "no-store",
-        "Vary": "Origin",
-    };
-    if (origin && ALLOWED_ORIGINS.has(origin)) {
-        headers["Access-Control-Allow-Origin"] = origin;
-        headers["Access-Control-Allow-Credentials"] = "true";
-    }
-    res.writeHead(status, headers);
+    });
     res.end(JSON.stringify(body));
 }
 
 async function handler(req, res) {
-    const origin = req.headers.origin;
-    if (origin && !ALLOWED_ORIGINS.has(origin)) {
-        return json(res, 403, { error: "Origin not allowed" }, req);
-    }
     if (req.method === "OPTIONS") {
-        const headers = { "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization", "Vary": "Origin" };
-        if (origin && ALLOWED_ORIGINS.has(origin)) headers["Access-Control-Allow-Origin"] = origin;
-        res.writeHead(204, headers);
+        res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type" });
         return res.end();
-    }
-    if (req.method === "POST" && !String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
-        return json(res, 415, { error: "POST requests must use Content-Type: application/json" }, req);
-    }
-    if (req.method === "POST" && !isLoopback) {
-        const supplied = String(req.headers.authorization || "");
-        if (!API_TOKEN || supplied !== `Bearer ${API_TOKEN}`) {
-            return json(res, 401, { error: "Unauthorized control request" }, req);
-        }
     }
     const url = new URL(req.url, `http://${req.headers.host}`);
     try {
         await initRunners();
-        if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true, mode: "PAPER_SPOT_LONG_ONLY", marketType: "SPOT", futuresSupported: false, liveOrdersEnabled: false, running, time: Date.now() }, req);
-        if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, aggregate(), req);
-        if (req.method === "GET" && url.pathname === "/api/positions") return json(res, 200, runners.map(runnerSnapshot).filter(x => x.position), req);
-        if (req.method === "GET" && url.pathname === "/api/trades") return json(res, 200, allTrades().slice(0, 100), req);
-        if (req.method === "GET" && url.pathname === "/api/markets") return json(res, 200, { strategy: strategy.name, interval: INTERVAL, markets: await scanMarkets() }, req);
-        if (req.method === "POST" && url.pathname === "/api/bot/start") { await startBot(); return json(res, 200, { ok: true, running }, req); }
-        if (req.method === "POST" && url.pathname === "/api/bot/stop") { stopBot(); return json(res, 200, { ok: true, running }, req); }
-        if (req.method === "POST" && url.pathname === "/api/bot/tick") { await tickOnce(); return json(res, 200, aggregate(), req); }
+        if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true, mode: "PAPER", running, time: Date.now() });
+        if (req.method === "GET" && url.pathname === "/api/events") {
+            const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") || 80)));
+            const after = Number(url.searchParams.get("after") || 0);
+            return json(res, 200, {
+                events: events.filter(event => event.id > after).slice(-limit).reverse(),
+                latestId: eventSequence,
+                telemetry: { lastSuccessfulBinanceAt, lastCandleAt, lastBinanceError, running, mode: "PAPER" },
+            });
+        }
+        if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, { ...aggregate(), telemetry: { lastSuccessfulBinanceAt, lastCandleAt, lastBinanceError, mode: "PAPER" } });
+        if (req.method === "GET" && url.pathname === "/api/positions") return json(res, 200, runners.map(runnerSnapshot).filter(x => x.position));
+        if (req.method === "GET" && url.pathname === "/api/trades") return json(res, 200, allTrades().slice(0, 100));
+        if (req.method === "GET" && url.pathname === "/api/markets") return json(res, 200, { strategy: strategy.name, interval: INTERVAL, markets: await scanMarkets() });
+        if (req.method === "POST" && url.pathname === "/api/bot/start") { await startBot(); return json(res, 200, { ok: true, running }); }
+        if (req.method === "POST" && url.pathname === "/api/bot/stop") { stopBot(); return json(res, 200, { ok: true, running }); }
+        if (req.method === "POST" && url.pathname === "/api/bot/tick") { await tickOnce(); return json(res, 200, aggregate()); }
         if (req.method === "POST" && url.pathname === "/api/risk/reset-halt") {
             for (const r of runners) { const price = currentPrice(r); r.engine.guard.resetHalt(r.engine.equity(price)); r.persist(); }
-            return json(res, 200, { ok: true }, req);
+            return json(res, 200, { ok: true });
         }
         if (req.method === "POST" && url.pathname === "/api/backtest") {
-            let body = "";
-            for await (const chunk of req) {
-                body += chunk;
-                if (Buffer.byteLength(body, "utf8") > 8192) {
-                    return json(res, 413, { error: "Request body too large (max 8 KB)" }, req);
-                }
-            }
-            let input = {};
-            if (body) {
-                try { input = JSON.parse(body); }
-                catch { return json(res, 400, { error: "Invalid JSON body" }, req); }
-            }
-            if (!input || typeof input !== "object" || Array.isArray(input)) {
-                return json(res, 400, { error: "Body must be a JSON object" }, req);
-            }
-            const symbol = String(input.symbol || "ETHUSDT").toUpperCase();
-            const interval = String(input.interval || "15m");
-            const candles = Number(input.candles ?? 10000);
-            const feeRate = Number(input.feeRate ?? 0.001);
-            const slippage = Number(input.slippage ?? 0.0005);
-            const split = Number(input.split ?? 0.7);
-            const haltResumeDays = Number(input.haltResumeDays ?? 7);
-            const validSymbol = /^[A-Z0-9]{5,20}$/.test(symbol) && symbol.endsWith("USDT");
-            const validIntervals = new Set(["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"]);
-            if (!validSymbol) return json(res, 400, { error: "Invalid USDT symbol" }, req);
-            if (!validIntervals.has(interval)) return json(res, 400, { error: "Unsupported interval" }, req);
-            if (!Number.isInteger(candles) || candles < 500 || candles > 50000) return json(res, 400, { error: "candles must be an integer between 500 and 50000" }, req);
-            if (!Number.isFinite(feeRate) || feeRate < 0 || feeRate > 0.02) return json(res, 400, { error: "feeRate must be between 0 and 0.02" }, req);
-            if (!Number.isFinite(slippage) || slippage < 0 || slippage > 0.02) return json(res, 400, { error: "slippage must be between 0 and 0.02" }, req);
-            if (!Number.isFinite(split) || split < 0.5 || split > 0.9) return json(res, 400, { error: "split must be between 0.5 and 0.9" }, req);
-            if (!Number.isFinite(haltResumeDays) || haltResumeDays < 0 || haltResumeDays > 365) return json(res, 400, { error: "haltResumeDays must be between 0 and 365" }, req);
+    let body = "";
 
-            const result = await runBacktest({
-                symbol, interval, candles, feeRate, slippage,
-                trailing: input.trailing !== false,
-                split, haltResumeDays,
-                refresh: input.refresh === true,
+    for await (const chunk of req) {
+        body += chunk;
+    }
+
+    let input = {};
+
+    if (body) {
+        try {
+            input = JSON.parse(body);
+        } catch {
+            return json(res, 400, {
+                error: "Invalid JSON body",
             });
-            return json(res, 200, { success: true, result, mode: "HISTORICAL_BACKTEST_SPOT_LONG_ONLY" }, req);
         }
-        return json(res, 404, { error: "Not found" }, req);
+    }
+
+    const result = await runBacktest({
+        symbol: input.symbol || "ETHUSDT",
+        interval: input.interval || "15m",
+        candles: Number(input.candles || 10000),
+        feeRate: Number(input.feeRate ?? 0.001),
+        slippage: Number(input.slippage ?? 0.0005),
+        trailing: input.trailing !== false,
+        split: Number(input.split || 0.7),
+        haltResumeDays: Number(
+            input.haltResumeDays ?? 7
+        ),
+        refresh: input.refresh === true,
+    });
+
+    return json(res, 200, {
+        success: true,
+        result,
+    });
+}
+        return json(res, 404, { error: "Not found" });
     } catch (error) {
+        recordEvent("error", "API_ERROR", error.message, { source: "api" });
         console.error(error);
-        return json(res, 500, { error: error.message }, req);
+        return json(res, 500, { error: error.message });
     }
 }
 
 const server = http.createServer(handler);
-server.listen(PORT, HOST, () => console.log(`TradeLab API listening on http://${HOST}:${PORT}`));
-if (process.env.AUTOSTART === "1") startBot().catch(console.error);
+server.listen(PORT, HOST, () => {
+    recordEvent("info", "API_READY", `TradeLab API listening on http://${HOST}:${PORT}; paper mode only`, { source: "system" });
+    console.log(`TradeLab API listening on http://${HOST}:${PORT}`);
+});
+if (process.env.AUTOSTART === "1") startBot().catch(error => {
+    recordEvent("error", "START_ERROR", error.message, { source: "system" });
+    console.error(error);
+});

@@ -75,7 +75,23 @@ type Runner = {
   risk: any;
 };
 
+type RuntimeEvent = {
+  id: number;
+  timestamp: number;
+  level: string;
+  category: string;
+  message: string;
+  symbol?: string;
+  source?: string;
+};
+
 type Status = {
+  telemetry?: {
+    lastSuccessfulBinanceAt: number | null;
+    lastCandleAt: number | null;
+    lastBinanceError: { at: number; message: string } | null;
+    mode: string;
+  };
   mode: string;
   running: boolean;
   strategy: string;
@@ -85,13 +101,7 @@ type Status = {
     startingBalance: number;
     equity: number;
     returnPct: number;
-    accountingModel?: string;
-    note?: string;
   };
-  marketType?: string;
-  futuresSupported?: boolean;
-  liveOrdersEnabled?: boolean;
-  accountingModel?: string;
   metrics: any;
   runners: Runner[];
 };
@@ -308,6 +318,7 @@ export default function Dashboard() {
   const [markets, setMarkets] = useState<Market[]>([]);
 
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([]);
 
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -342,6 +353,9 @@ export default function Dashboard() {
         fetch(`${API}/api/trades`, {
           cache: "no-store",
         }).then((r) => r.json()),
+        fetch(`${API}/api/events?limit=80`, {
+          cache: "no-store",
+        }).then((r) => r.json()),
       ]);
 
       if (s.error) {
@@ -351,6 +365,7 @@ export default function Dashboard() {
       setStatus(s);
       setMarkets(m.markets || []);
       setTrades(t || []);
+      setRuntimeEvents((e.events || []).slice(0, 80));
       setError("");
     } catch (e: any) {
       setError(e.message || "Backend API unavailable");
@@ -369,17 +384,11 @@ export default function Dashboard() {
     setBusy(true);
 
     try {
-      const response = await fetch(`${API}${path}`, {
+      await fetch(`${API}${path}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload.error || payload.ok === false) {
-        throw new Error(payload.error || `Command failed (${response.status})`);
-      }
+
       await load();
-    } catch (e: any) {
-      setError(e.message || "Bot command failed");
     } finally {
       setBusy(false);
     }
@@ -665,6 +674,8 @@ export default function Dashboard() {
       </div>
 
       <MarketTable markets={markets} />
+
+      <OperationsMonitor status={status} events={runtimeEvents} />
 
       <div className="grid gap-6 xl:grid-cols-2">
         <PositionsCard positions={positions} />
@@ -2259,11 +2270,9 @@ export default function Dashboard() {
           <div className="mt-5 space-y-4">
             <SettingInput label="API URL" value={API} readOnly />
 
-            <SettingInput label="Environment" value="PAPER ONLY" readOnly />
+            <SettingInput label="Environment" value="PAPER" readOnly />
 
-            <SettingInput label="Implemented market" value="Spot · long-only" readOnly />
-            <p className="text-xs leading-5 text-amber-300/80">Futures trading is not implemented. Do not interpret this simulation as futures performance; leverage, funding, liquidation and margin are not modeled.</p>
-            <SettingInput label="Market data" value="Binance Spot API" readOnly />
+            <SettingInput label="Market data" value="Binance" readOnly />
           </div>
         </section>
 
@@ -2284,8 +2293,6 @@ export default function Dashboard() {
             <ConfigRow label="Interval" value={status?.interval || "—"} />
 
             <ConfigRow label="Mode" value={status?.mode || "PAPER"} />
-            <ConfigRow label="Futures support" value={status?.futuresSupported ? "Enabled" : "Not implemented"} />
-            <ConfigRow label="Live orders" value={status?.liveOrdersEnabled ? "Enabled" : "Disabled"} />
           </div>
 
           <div className="mt-6 flex gap-2">
@@ -2480,7 +2487,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2">
               <div className="hidden items-center gap-2 rounded-xl border border-amber-400/15 bg-amber-400/5 px-3 py-2 text-xs text-amber-300 sm:flex">
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                SPOT PAPER · LONG ONLY
+                PAPER MODE
               </div>
 
               <button
@@ -2533,7 +2540,7 @@ export default function Dashboard() {
 
               <span>
                 Engine: {status?.running ? "running" : "stopped"} · Binance data
-                · SPOT PAPER · LONG ONLY
+                · PAPER
               </span>
             </footer>
           </div>
@@ -2670,6 +2677,74 @@ function RiskCard({ runners, dailyLoss, drawdown, maxLosses, maxTrades }: any) {
         {runners.some((r: any) => r.risk?.halted)
           ? "One or more accounts are HALTED."
           : "All risk guards are clear."}
+      </div>
+    </section>
+  );
+}
+
+function OperationsMonitor({
+  status,
+  events,
+}: {
+  status: Status | null;
+  events: RuntimeEvent[];
+}) {
+  const telemetry = status?.telemetry;
+  const lastSuccess = telemetry?.lastSuccessfulBinanceAt;
+  const lastCandle = telemetry?.lastCandleAt;
+  const error = telemetry?.lastBinanceError;
+  const formatTime = (value?: number | null) =>
+    value ? new Date(value).toLocaleString() : "No successful update yet";
+
+  return (
+    <section className="glass overflow-hidden rounded-2xl">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-white/6 p-5">
+        <div>
+          <SectionHeader
+            title="Live backend operations"
+            description="Timestamped events emitted by the backend. This is paper trading only; no real Binance orders are sent."
+          />
+        </div>
+        <span className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${status?.running ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-amber-400/20 bg-amber-400/10 text-amber-300"}`}>
+          {status?.running ? "PAPER ENGINE RUNNING" : "PAPER ENGINE STOPPED"}
+        </span>
+      </div>
+
+      <div className="grid gap-3 border-b border-white/6 p-4 sm:grid-cols-3">
+        <div className="rounded-xl border border-white/6 bg-white/[.02] p-3">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Last Binance data success</div>
+          <div className="mt-2 text-xs text-zinc-200">{formatTime(lastSuccess)}</div>
+        </div>
+        <div className="rounded-xl border border-white/6 bg-white/[.02] p-3">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Last processed candle</div>
+          <div className="mt-2 text-xs text-zinc-200">{formatTime(lastCandle)}</div>
+        </div>
+        <div className="rounded-xl border border-white/6 bg-white/[.02] p-3">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Latest API/data error</div>
+          <div className={`mt-2 line-clamp-2 text-xs ${error ? "text-red-300" : "text-emerald-300"}`}>{error ? `${formatTime(error.at)} — ${error.message}` : "No recorded data errors"}</div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between border-b border-white/5 px-5 py-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-zinc-300"><Terminal size={14} /> Runtime event feed</div>
+        <div className="text-[10px] text-zinc-600">Refreshes with dashboard · newest first</div>
+      </div>
+      <div className="max-h-[420px] overflow-y-auto">
+        {events.length === 0 ? (
+          <div className="p-8 text-center text-xs leading-5 text-zinc-500">No backend events recorded yet. Start the paper engine to see fetches, candle evaluations, signals, risk decisions and trade events here.</div>
+        ) : events.map((event) => (
+          <div key={event.id} className="flex gap-3 border-b border-white/[.035] px-5 py-3 last:border-0">
+            <div className={`mt-1 h-2 w-2 shrink-0 rounded-full ${event.level === "error" ? "bg-red-400" : event.level === "warn" ? "bg-amber-400" : event.level === "trade" ? "bg-indigo-400" : "bg-emerald-400"}`} />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-bold tracking-wider text-zinc-400">{event.category}</span>
+                {event.symbol && <span className="text-[10px] text-zinc-600">{event.symbol}</span>}
+                <span className="ml-auto text-[10px] tabular-nums text-zinc-600">{new Date(event.timestamp).toLocaleTimeString()}</span>
+              </div>
+              <p className="mt-1 break-words text-xs leading-5 text-zinc-300">{event.message}</p>
+            </div>
+          </div>
+        ))}
       </div>
     </section>
   );

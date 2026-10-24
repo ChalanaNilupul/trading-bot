@@ -16,6 +16,26 @@ let lastPrices = new Map();
 let tickerCache = { at: 0, data: new Map() };
 let marketCache = { at: 0, data: [] };
 let filtersLoaded = false;
+const MAX_EVENTS = 500;
+let eventSequence = 0;
+const events = [];
+let lastSuccessfulBinanceAt = null;
+let lastCandleAt = null;
+let lastBinanceError = null;
+
+function recordEvent(level, category, message, details = {}) {
+    const event = {
+        id: ++eventSequence,
+        timestamp: Date.now(),
+        level,
+        category,
+        message: String(message).slice(0, 500),
+        ...details,
+    };
+    events.push(event);
+    if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
+    return event;
+}
 
 function createRunners() {
     return SYMBOLS.map(symbol => new Runner(symbol));
@@ -24,13 +44,25 @@ function createRunners() {
 async function initRunners(loadFilters = false) {
     if (runners.length) return;
     runners = createRunners();
-    for (const runner of runners) await runner.init(loadFilters);
+    for (const runner of runners) {
+        const originalOnEvent = runner.onEvent.bind(runner);
+        runner.onEvent = event => {
+            originalOnEvent(event);
+            const level = event.type === "SKIP" || event.type === "GUARD" ? "warn" : event.type === "EXIT" || event.type === "ENTRY" ? "trade" : "info";
+            recordEvent(level, event.type, `${runner.symbol}: ${event.message}`, { symbol: runner.symbol, source: "paper-engine" });
+        };
+        await runner.init(loadFilters);
+    }
+    recordEvent("info", "SYSTEM", `Initialized ${runners.length} paper runner(s)`, { source: "system" });
 }
 
 async function refreshTickers() {
     const now = Date.now();
     if (now - tickerCache.at < 15000) return tickerCache.data;
     const rows = await getTickers24h();
+    lastSuccessfulBinanceAt = Date.now();
+    lastBinanceError = null;
+    recordEvent("info", "BINANCE", `Fetched 24h ticker data (${rows.length} symbols)`, { source: "binance" });
     const map = new Map();
     for (const row of rows) {
         const symbol = String(row.symbol || "");
@@ -102,12 +134,16 @@ async function scanMarkets() {
     for (const symbol of SYMBOLS) {
         try {
             const candles = await getCandles(symbol, INTERVAL, 300);
+            lastSuccessfulBinanceAt = Date.now();
+            lastBinanceError = null;
             if (candles.length < WARMUP + 1) continue;
             const series = buildSeries(candles);
             const ctx = strategy.prepare(candles, series);
             const i = candles.length - 1;
             const analysis = strategy.analyze(ctx, candles, series, i);
             const ticker = tickers.get(symbol) || {};
+            lastCandleAt = candles[i].closeTime;
+            recordEvent("info", "SCAN", `${symbol} ${analysis.signal} signal (${analysis.score}/${analysis.maxScore}) on ${INTERVAL} candle`, { symbol, source: "market-scanner", candleTime: candles[i].closeTime });
             output.push({
                 symbol,
                 price: Number(ticker.price ?? analysis.price ?? candles[i].close),
@@ -122,6 +158,8 @@ async function scanMarkets() {
                 blockers: analysis.blockers || [],
             });
         } catch (error) {
+            lastBinanceError = { at: Date.now(), message: error.message };
+            recordEvent("error", "BINANCE_ERROR", `${symbol} market scan failed: ${error.message}`, { symbol, source: "market-scanner" });
             output.push({ symbol, error: error.message });
         }
     }
@@ -159,10 +197,17 @@ async function tickOnce() {
     let changed = false;
     for (const runner of runners) {
         try {
-            if (await runner.tick()) changed = true;
+            const hadNewCandle = await runner.tick();
+            if (hadNewCandle) changed = true;
             runner.errors = 0;
+            lastSuccessfulBinanceAt = Date.now();
+            lastBinanceError = null;
+            recordEvent("info", "BINANCE", `${runner.symbol}: candle data fetched; ${hadNewCandle ? "new closed candle processed" : "no new closed candle"}`, { symbol: runner.symbol, source: "paper-engine", candleTime: runner.lastProcessed });
+            if (hadNewCandle) recordEvent("info", "STRATEGY", `${runner.symbol}: ${runner.lastNote}`, { symbol: runner.symbol, source: "paper-engine", candleTime: runner.lastProcessed });
         } catch (error) {
             runner.errors += 1;
+            lastBinanceError = { at: Date.now(), message: error.message };
+            recordEvent("error", "FETCH_ERROR", `${runner.symbol}: ${error.message} (consecutive errors: ${runner.errors})`, { symbol: runner.symbol, source: "paper-engine" });
             console.error(`${runner.symbol}: ${error.message}`);
         }
     }
@@ -190,11 +235,16 @@ async function startBot() {
         }
         filtersLoaded = true;
     }
-    if (!running) { running = true; botLoop(); }
+    if (!running) {
+        running = true;
+        recordEvent("info", "BOT_START", `Paper engine started: ${strategy.name}, ${INTERVAL}, ${SYMBOLS.length} symbols`, { source: "system" });
+        botLoop();
+    }
 }
 
 function stopBot() {
     running = false;
+    recordEvent("warn", "BOT_STOP", "Paper engine stop requested; saving runner state", { source: "system" });
     runners.forEach(r => r.persist());
 }
 
@@ -216,7 +266,16 @@ async function handler(req, res) {
     try {
         await initRunners();
         if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true, mode: "PAPER", running, time: Date.now() });
-        if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, aggregate());
+        if (req.method === "GET" && url.pathname === "/api/events") {
+            const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") || 80)));
+            const after = Number(url.searchParams.get("after") || 0);
+            return json(res, 200, {
+                events: events.filter(event => event.id > after).slice(-limit).reverse(),
+                latestId: eventSequence,
+                telemetry: { lastSuccessfulBinanceAt, lastCandleAt, lastBinanceError, running, mode: "PAPER" },
+            });
+        }
+        if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, { ...aggregate(), telemetry: { lastSuccessfulBinanceAt, lastCandleAt, lastBinanceError, mode: "PAPER" } });
         if (req.method === "GET" && url.pathname === "/api/positions") return json(res, 200, runners.map(runnerSnapshot).filter(x => x.position));
         if (req.method === "GET" && url.pathname === "/api/trades") return json(res, 200, allTrades().slice(0, 100));
         if (req.method === "GET" && url.pathname === "/api/markets") return json(res, 200, { strategy: strategy.name, interval: INTERVAL, markets: await scanMarkets() });
@@ -267,11 +326,18 @@ async function handler(req, res) {
 }
         return json(res, 404, { error: "Not found" });
     } catch (error) {
+        recordEvent("error", "API_ERROR", error.message, { source: "api" });
         console.error(error);
         return json(res, 500, { error: error.message });
     }
 }
 
 const server = http.createServer(handler);
-server.listen(PORT, HOST, () => console.log(`TradeLab API listening on http://${HOST}:${PORT}`));
-if (process.env.AUTOSTART === "1") startBot().catch(console.error);
+server.listen(PORT, HOST, () => {
+    recordEvent("info", "API_READY", `TradeLab API listening on http://${HOST}:${PORT}; paper mode only`, { source: "system" });
+    console.log(`TradeLab API listening on http://${HOST}:${PORT}`);
+});
+if (process.env.AUTOSTART === "1") startBot().catch(error => {
+    recordEvent("error", "START_ERROR", error.message, { source: "system" });
+    console.error(error);
+});
