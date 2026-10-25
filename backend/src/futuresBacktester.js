@@ -27,11 +27,24 @@ const INTERVALS = new Set([
 ]);
 const SYMBOL_RE = /^[A-Z0-9]{3,30}$/;
 
+function priceReturnPct(candles, start, end) {
+  const first = candles[start]?.close;
+  const last = candles[end - 1]?.close;
+  if (
+    !Number.isFinite(first) ||
+    !Number.isFinite(last) ||
+    first <= 0 ||
+    end <= start
+  ) return 0;
+  return ((last / first) - 1) * 100;
+}
+
 function runSegment({ candles, strategy, config, filters, start, end }) {
   const engine = new FuturesEngine({
     ...config,
     ...strategy.engine,
     ...filters,
+    allowShort: config.allowShort,
     startingBalance: config.startingBalance,
     leverage: config.leverage,
     feeRate: config.feeRate,
@@ -75,7 +88,7 @@ function runSegment({ candles, strategy, config, filters, start, end }) {
     (sum, trade) => sum + (trade.funding || 0),
     0,
   );
-  return { engine, metrics };
+  return { engine, metrics, buyHold: priceReturnPct(candles, start, end) };
 }
 
 async function runFuturesBacktest(options = {}) {
@@ -108,7 +121,7 @@ async function runFuturesBacktest(options = {}) {
     maxConsecutiveLosses: Number(options.maxConsecutiveLosses ?? 3),
     maxTradesPerDay: Number(options.maxTradesPerDay ?? 6),
     haltResumeDays: Number(options.haltResumeDays ?? 7),
-    allowShort: options.allowShort ?? process.env.SHORTS === "1",
+    allowShort: options.allowShort === true,
     split: Math.max(0.5, Math.min(0.9, Number(options.split ?? 0.7))),
   };
   if (!SYMBOL_RE.test(config.symbol)) throw new Error("Invalid symbol");
@@ -212,16 +225,19 @@ async function runFuturesBacktest(options = {}) {
         "signals are evaluated at candle close and queued entries execute at the next candle open",
     },
     full: {
+      buyHold: full.buyHold,
       metrics: full.metrics,
       trades: full.engine.trades,
       equityCurve: full.engine.equityCurve,
     },
     inSample: {
+      buyHold: inSample.buyHold,
       metrics: inSample.metrics,
       trades: inSample.engine.trades,
       equityCurve: inSample.engine.equityCurve,
     },
     outSample: {
+      buyHold: outSample.buyHold,
       metrics: outSample.metrics,
       trades: outSample.engine.trades,
       equityCurve: outSample.engine.equityCurve,
@@ -235,4 +251,4 @@ async function runFuturesBacktest(options = {}) {
   };
 }
 
-module.exports = { runFuturesBacktest };
+module.exports = { runFuturesBacktest, priceReturnPct };

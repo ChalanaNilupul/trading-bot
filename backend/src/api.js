@@ -329,6 +329,7 @@ async function handler(req, res) {
                 interval: input.interval || "4h",
                 candles: Number(input.candles ?? 5000),
                 strategy: input.strategy || strategy.name,
+                allowShort: input.allowShort === true,
                 startingBalance: Number(input.startingBalance ?? START_BALANCE),
                 leverage: Number(input.leverage ?? LEVERAGE),
                 feeRate: Number(input.feeRate ?? process.env.FEE_RATE ?? 0.0005),

@@ -14,7 +14,7 @@ const DEFAULTS = {
   maintenanceMarginRate: 0.005,
   fundingRatePer8h: 0.0001, // configurable estimate; real funding rates vary by symbol/time
   trailing: true,
-  allowShort: true, // bot/backtest pass SHORTS=1 to opt in; set false for long-only
+  allowShort: false, // short entries require explicit opt-in and a SHORT signal
   stepSize: null,
   minQty: 0,
   minNotional: 5,
@@ -102,7 +102,7 @@ class FuturesEngine {
       else if (
         !this.position &&
         (analysis.signal === "BUY" ||
-          (analysis.signal === "SELL" && this.cfg.allowShort))
+          (analysis.signal === "SHORT" && this.cfg.allowShort))
       ) {
         const gate = this.guard.canOpen(
           immediate ? execution.executionTime : candle.closeTime,
@@ -287,8 +287,7 @@ class FuturesEngine {
   }
 
   _checkExits(candle) {
-    const p = this.position,
-      slip = this.cfg.slippage;
+    const p = this.position;
     const stopHit =
       p.side === "LONG"
         ? candle.low <= p.stopPrice
@@ -314,7 +313,11 @@ class FuturesEngine {
         p.side === "LONG"
           ? Math.max(candle.open, p.targetPrice)
           : Math.min(candle.open, p.targetPrice);
-      this._close(raw, candle.closeTime, "TAKE PROFIT");
+      this._close(
+        this._marketFill(raw, p.side === "LONG" ? "SELL" : "BUY"),
+        candle.closeTime,
+        "TAKE PROFIT",
+      );
       return;
     }
     p.extreme =
