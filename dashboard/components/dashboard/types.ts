@@ -81,6 +81,7 @@ export type BacktestResult = {
     trailing: boolean;
     split: number;
     haltResumeDays: number;
+    strategy?: string;
   };
   period: {
     candles: number;

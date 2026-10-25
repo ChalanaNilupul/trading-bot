@@ -1,8 +1,29 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, BarChart3, Bot, LayoutDashboard, Menu, Pause, Play, Radar, Settings, ShieldCheck, SlidersHorizontal, Wallet, X, RefreshCw } from "lucide-react";
-import { BacktestResult, Market, RuntimeEvent, Status, Trade } from "./dashboard/types";
+import {
+  Activity,
+  BarChart3,
+  Bot,
+  LayoutDashboard,
+  Menu,
+  Pause,
+  Play,
+  Radar,
+  Settings,
+  ShieldCheck,
+  SlidersHorizontal,
+  Wallet,
+  X,
+  RefreshCw,
+} from "lucide-react";
+import {
+  BacktestResult,
+  Market,
+  RuntimeEvent,
+  Status,
+  Trade,
+} from "./dashboard/types";
 import { time } from "./dashboard/format";
 import { API } from "./dashboard/config";
 import { OverviewPage } from "./dashboard/pages/OverviewPage";
@@ -14,7 +35,6 @@ import { StrategiesPage } from "./dashboard/pages/StrategiesPage";
 import { RiskPage } from "./dashboard/pages/RiskPage";
 import { SettingsPage } from "./dashboard/pages/SettingsPage";
 
-
 const nav = [
   ["Overview", LayoutDashboard],
   ["Markets", Radar],
@@ -24,7 +44,6 @@ const nav = [
   ["Strategies", SlidersHorizontal],
   ["Risk", ShieldCheck],
 ] as const;
-
 
 export default function Dashboard() {
   const [active, setActive] = useState("Overview");
@@ -55,6 +74,7 @@ export default function Dashboard() {
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(
     null,
   );
+  const [backtestStrategy, setBacktestStrategy] = useState("Breakout 50/20");
 
   const load = useCallback(async () => {
     try {
@@ -227,6 +247,7 @@ export default function Dashboard() {
         },
         body: JSON.stringify({
           symbol: backtestSymbol,
+          strategy: backtestStrategy,
           interval: backtestInterval,
           candles: Number(backtestCandles),
         }),
@@ -252,29 +273,116 @@ export default function Dashboard() {
   const renderPage = () => {
     switch (active) {
       case "Markets":
-        return <MarketsPage status={status} runners={runners} markets={markets} m={m} filteredMarkets={filteredMarkets} marketSearch={marketSearch} setMarketSearch={setMarketSearch} signalCounts={signalCounts} setActive={setActive} />;
+        return (
+          <MarketsPage
+            status={status}
+            runners={runners}
+            markets={markets}
+            m={m}
+            filteredMarkets={filteredMarkets}
+            marketSearch={marketSearch}
+            setMarketSearch={setMarketSearch}
+            signalCounts={signalCounts}
+            setActive={setActive}
+          />
+        );
 
       case "Positions":
-        return <PositionsPage runners={runners} positions={positions} trades={trades} equity={equity} />;
+        return (
+          <PositionsPage
+            runners={runners}
+            positions={positions}
+            trades={trades}
+            equity={equity}
+          />
+        );
 
       case "Trades":
-        return <TradesPage trades={trades} filteredTrades={filteredTrades} tradeSearch={tradeSearch} setTradeSearch={setTradeSearch} avgTrade={avgTrade} winningTrades={winningTrades} losingTrades={losingTrades} totalFees={totalFees} tradeChart={tradeChart} />;
+        return (
+          <TradesPage
+            trades={trades}
+            filteredTrades={filteredTrades}
+            tradeSearch={tradeSearch}
+            setTradeSearch={setTradeSearch}
+            avgTrade={avgTrade}
+            winningTrades={winningTrades}
+            losingTrades={losingTrades}
+            totalFees={totalFees}
+            tradeChart={tradeChart}
+          />
+        );
 
       case "Backtests":
-        return <BacktestsPage trades={trades} equity={equity} drawdown={drawdown} backtestSymbol={backtestSymbol} setBacktestSymbol={setBacktestSymbol} backtestInterval={backtestInterval} setBacktestInterval={setBacktestInterval} backtestCandles={backtestCandles} setBacktestCandles={setBacktestCandles} backtestRunning={backtestRunning} backtestResult={backtestResult} runBacktest={runBacktest} />;
+        return (
+          <BacktestsPage
+            trades={trades}
+            equity={equity}
+            drawdown={drawdown}
+            backtestSymbol={backtestSymbol}
+            setBacktestSymbol={setBacktestSymbol}
+            backtestInterval={backtestInterval}
+            setBacktestInterval={setBacktestInterval}
+            backtestCandles={backtestCandles}
+            setBacktestCandles={setBacktestCandles}
+            backtestRunning={backtestRunning}
+            backtestResult={backtestResult}
+            runBacktest={runBacktest}
+            backtestStrategy={backtestStrategy}
+            setBacktestStrategy={setBacktestStrategy}
+          />
+        );
 
       case "Strategies":
-        return <StrategiesPage status={status} runners={runners} markets={markets} equity={equity} />;
+        return (
+          <StrategiesPage
+            status={status}
+            runners={runners}
+            markets={markets}
+            equity={equity}
+          />
+        );
 
       case "Risk":
-        return <RiskPage status={status} runners={runners} trades={trades} dailyLoss={dailyLoss} drawdown={drawdown} maxLosses={maxLosses} maxTrades={maxTrades} />;
+        return (
+          <RiskPage
+            status={status}
+            runners={runners}
+            trades={trades}
+            dailyLoss={dailyLoss}
+            drawdown={drawdown}
+            maxLosses={maxLosses}
+            maxTrades={maxTrades}
+          />
+        );
 
       case "Settings":
-        return <SettingsPage status={status} busy={busy} command={command} load={load} />;
+        return (
+          <SettingsPage
+            status={status}
+            busy={busy}
+            command={command}
+            load={load}
+          />
+        );
 
       case "Overview":
       default:
-        return <OverviewPage status={status} runners={runners} positions={positions} trades={trades} markets={markets} runtimeEvents={runtimeEvents} equity={equity} m={m} dailyLoss={dailyLoss} drawdown={drawdown} maxLosses={maxLosses} maxTrades={maxTrades} />;
+        return (
+          <OverviewPage
+            status={status}
+            runners={runners}
+            positions={positions}
+            trades={trades}
+            markets={markets}
+            runtimeEvents={runtimeEvents}
+            equity={equity}
+            m={m}
+            dailyLoss={dailyLoss}
+            drawdown={drawdown}
+            maxLosses={maxLosses}
+            maxTrades={maxTrades}
+          />
+        );
     }
   };
 
