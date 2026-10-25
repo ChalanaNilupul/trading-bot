@@ -1,7 +1,22 @@
 "use client";
 
-import { Activity, Gauge, ShieldCheck, Wallet, CircleDollarSign, TrendingUp } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Activity,
+  Gauge,
+  ShieldCheck,
+  Wallet,
+  CircleDollarSign,
+  TrendingUp,
+} from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { SectionHeader, Stat } from "../ui";
 import { RiskCard } from "../cards/RiskCard";
 import { OperationsMonitor } from "../cards/OperationsMonitor";
@@ -11,7 +26,20 @@ import { RecentTrades } from "../cards/RecentTrades";
 import { Market, Runner, RuntimeEvent, Status, Trade } from "../types";
 import { money, pct, time } from "../format";
 
-export function OverviewPage({ status, runners, positions, trades, markets, runtimeEvents, equity, m, dailyLoss, drawdown, maxLosses, maxTrades }: {
+export function OverviewPage({
+  status,
+  runners,
+  positions,
+  trades,
+  markets,
+  runtimeEvents,
+  equity,
+  m,
+  dailyLoss,
+  drawdown,
+  maxLosses,
+  maxTrades,
+}: {
   status: Status | null;
   runners: Runner[];
   positions: Runner[];
@@ -166,15 +194,15 @@ export function OverviewPage({ status, runners, positions, trades, markets, runt
         />
       </div>
 
-      <MarketTable markets={markets} />
-
-      <OperationsMonitor status={status} events={runtimeEvents} />
-
       <div className="grid gap-6 xl:grid-cols-2">
         <PositionsCard positions={positions} />
 
         <RecentTrades trades={trades} />
       </div>
+
+      <MarketTable markets={markets} />
+
+      <OperationsMonitor status={status} events={runtimeEvents} />
     </div>
   );
 }
