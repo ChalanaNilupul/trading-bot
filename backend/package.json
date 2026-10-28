@@ -10,7 +10,7 @@
     "bot": "node src/index.js",
     "backtest": "node src/backtester.js",
     "scan": "node src/scanner.js",
-    "test": "node test/selftest.js && node --test test/aiFilter.test.js",
+    "test": "node test/selftest.js && node --test test/aiFilter.test.js test/aiMonitor.test.js",
     "compare": "node src/compare.js",
     "api": "node --env-file=.env src/api.js"
   }
