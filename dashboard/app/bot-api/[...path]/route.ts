@@ -12,6 +12,7 @@ const GET_ALLOWED = new Set([
   "/api/trades",
   "/api/markets",
   "/api/events",
+  "/api/ai",
 ]);
 const POST_ALLOWED = new Set([
   "/api/bot/start",
@@ -19,6 +20,7 @@ const POST_ALLOWED = new Set([
   "/api/bot/tick",
   "/api/risk/reset-halt",
   "/api/backtest",
+  "/api/ai/test",
 ]);
 
 async function forward(
@@ -69,7 +71,7 @@ async function forward(
       headers,
       body,
       cache: "no-store",
-      signal: AbortSignal.timeout(route === "/api/backtest" ? 120_000 : 15_000),
+      signal: AbortSignal.timeout(route === "/api/backtest" ? 120_000 : route === "/api/ai/test" ? 35_000 : 15_000),
     });
     return new NextResponse(await res.text(), {
       status: res.status,
