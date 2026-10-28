@@ -12,6 +12,6 @@
     "scan": "node src/scanner.js",
     "test": "node test/selftest.js && node --test test/aiFilter.test.js",
     "compare": "node src/compare.js",
-    "api": "node src/api.js"
+    "api": "node --env-file=.env src/api.js"
   }
 }
