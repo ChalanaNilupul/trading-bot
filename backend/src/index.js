@@ -120,7 +120,7 @@ class Runner {
                     candles: candles.slice(-60),
                 });
                 store.appendLine(`data/ai_${this.symbol}.jsonl`, {
-                    candleTime: latest.closeTime, model: this.aiFilter.model, ...decision,
+                    candleTime: latest.closeTime, provider: this.aiFilter.provider, model: this.aiFilter.model, ...decision,
                 });
             }
         }

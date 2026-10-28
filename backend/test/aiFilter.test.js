@@ -53,3 +53,71 @@ test('veto blocks entries but cannot block a short position exit', () => {
     assert.equal(engine.position, null);
     assert.equal(engine.trades[0].reason, 'SIGNAL');
 });
+
+const geminiEnv = { AI_ENABLED: '1', AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'gemini-secret', AI_MODEL: 'test-gemini' };
+const geminiBody = review => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(review) }] } }] });
+const jsonResponse = body => ({ ok: true, json: async () => body });
+test('Gemini uses only its key, official endpoint, schema and supplied snapshot', async () => {
+    const snapshot = { signal: 'BUY', symbol: 'BTCUSDT', candles: [] };
+    const filter = new AIEntryFilter({ env: { ...geminiEnv, OPENAI_API_KEY: 'unused-secret' }, fetchImpl: async (url, options) => {
+        assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models/test-gemini:generateContent');
+        assert.ok(!url.includes('secret'));
+        assert.equal(options.headers['x-goog-api-key'], 'gemini-secret');
+        assert.equal(options.headers.Authorization, undefined);
+        assert.ok(!options.body.includes('secret'));
+        const request = JSON.parse(options.body);
+        assert.deepEqual(JSON.parse(request.contents[0].parts[0].text), snapshot);
+        assert.equal(request.generationConfig.responseFormat.text.mimeType, 'APPLICATION_JSON');
+        assert.deepEqual(request.generationConfig.responseFormat.text.schema.required, ['approve', 'confidence', 'reason']);
+        assert.ok(request.systemInstruction.parts[0].text.includes('paper-trading'));
+        return jsonResponse(geminiBody({ approve: true, confidence: 0.9, reason: 'trend' }));
+    } });
+    assert.equal((await filter.evaluate(snapshot)).allowed, true);
+});
+test('provider selection validates configuration without falling back to another key', () => {
+    assert.equal(new AIEntryFilter({ env }).provider, 'openai');
+    assert.equal(new AIEntryFilter({ env: geminiEnv }).provider, 'gemini');
+    assert.throws(() => new AIEntryFilter({ env: { ...env, AI_PROVIDER: 'other' } }), /AI_PROVIDER/);
+    assert.throws(() => new AIEntryFilter({ env: { ...env, AI_PROVIDER: 'gemini' } }), /GEMINI_API_KEY/);
+    assert.throws(() => new AIEntryFilter({ env: { ...geminiEnv, AI_MODEL: '' } }), /AI_MODEL/);
+});
+test('Gemini applies confidence/veto validation and ignores thought parts', async () => {
+    for (const [review, expected] of [
+        [{ approve: false, confidence: 0.9, reason: 'chop' }, false],
+        [{ approve: true, confidence: 0.5, reason: 'weak' }, false],
+        [{ approve: true, confidence: '0.9', reason: 'invalid' }, false],
+        [null, false],
+        [{ approve: true, confidence: 0.9, reason: 'trend' }, true],
+    ]) {
+        const body = geminiBody(review);
+        body.candidates[0].content.parts.unshift({ thought: true, text: 'not final JSON' });
+        const filter = new AIEntryFilter({ env: geminiEnv, fetchImpl: async () => jsonResponse(body) });
+        assert.equal((await filter.evaluate({})).allowed, expected);
+    }
+});
+test('Gemini blocked, truncated, empty, malformed, HTTP and timeout replies veto without fallback', async () => {
+    const valid = { approve: true, confidence: 0.9, reason: 'trend' };
+    for (const body of [
+        { promptFeedback: { blockReason: 'SAFETY' }, ...geminiBody(valid) },
+        { candidates: [{ ...geminiBody(valid).candidates[0], finishReason: 'MAX_TOKENS' }] },
+        { candidates: [{ ...geminiBody(valid).candidates[0], finishReason: 'SAFETY' }] },
+        { candidates: [{ ...geminiBody(valid).candidates[0], safetyRatings: [{ blocked: true }] }] },
+        { candidates: [] },
+        { candidates: [{ finishReason: 'STOP', content: { parts: [] } }] },
+        { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '{' }] } }] },
+    ]) {
+        assert.equal((await new AIEntryFilter({ env: geminiEnv, fetchImpl: async () => jsonResponse(body) }).evaluate({})).allowed, false);
+    }
+    for (const fetchImpl of [
+        async () => ({ ok: false, status: 429 }),
+        async () => { throw Error('gemini-secret'); },
+        (_, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(Error('timeout')))),
+    ]) {
+        let calls = 0;
+        const filter = new AIEntryFilter({ env: { ...geminiEnv, AI_TIMEOUT_MS: '100' }, fetchImpl: (...args) => { calls++; return fetchImpl(...args); } });
+        const decision = await filter.evaluate({});
+        assert.equal(decision.allowed, false);
+        assert.ok(!decision.reason.includes('secret'));
+        assert.equal(calls, 1);
+    }
+});

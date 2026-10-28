@@ -71,28 +71,33 @@ npm test
 
 Tests cover strategy causality, existing spot engine regression tests, futures long/short accounting paths, isolated liquidation simulation, funding-boundary handling, and state restoration.
 
-## Optional OpenAI entry review
+## Optional AI entry review (OpenAI or Gemini)
 
 AI is **disabled by default**. It is an experimental veto on strategy BUY/SHORT
 entries in the continuous paper runner (CLI and API). It never creates signals,
 changes sizing/stops/leverage, or blocks exits. Existing positions do not wait on
 AI. Only the latest closed candle is reviewed; the last 60 closed candles and
-strategy indicators are sent to OpenAI. No account credentials are sent.
+strategy indicators are sent to the selected AI provider. No account credentials are sent.
 
 1. Copy `.env.example` to `.env` inside `backend`.
-2. Set `AI_ENABLED=1`, your backend-only `OPENAI_API_KEY`, and `AI_MODEL` to a
-   model in your project that supports Chat Completions structured outputs.
+2. Set `AI_ENABLED=1` and choose a provider:
+   - `AI_PROVIDER=openai` (default): set backend-only `OPENAI_API_KEY` and
+     `AI_MODEL` to a model supporting Chat Completions structured outputs.
+   - `AI_PROVIDER=gemini`: set backend-only `GEMINI_API_KEY` and `AI_MODEL` to
+     an available Gemini model supporting Generate Content structured outputs.
+     Use the bare model ID, without `models/`. OpenAI credentials are not required.
+   Only the selected provider is called; there is no automatic fallback or dual review.
 3. For the dashboard, set `API_KEY` separately (at least 16 characters).
 4. With Node 20.6+, run `node --env-file=.env src/index.js` for CLI paper trading,
    or `node --env-file=.env src/api.js` for the dashboard backend. On Node 18,
    export variables through your shell/process manager; `.env` is not auto-loaded.
 
-Do not put the OpenAI key in browser code or `NEXT_PUBLIC_*` variables. Never
-commit `.env`. Requests use the fixed official OpenAI endpoint, an 8-second
+Do not put either provider key in browser code or `NEXT_PUBLIC_*` variables. Never
+commit `.env`. Requests use the selected provider's fixed official endpoint, an 8-second
 configurable timeout, structured responses, and no retries. API failures,
 refusals, invalid output, and low confidence veto new entries. Confidence is a
 subjective model score, **not** a win probability. Reviews incur API charges.
-Decisions are recorded in `data/ai_SYMBOL.jsonl`; the latest review is included
+Decisions include the provider and model and are recorded in `data/ai_SYMBOL.jsonl`; the latest review is included
 in the runner's signal note. Execution price is refreshed after the review.
 
 Historical backtests and market scans remain strategy-only: **they do not
@@ -103,3 +108,23 @@ cost over an adequate unseen sample. Do not tune confidence or strategy settings
 on the evaluation period. An LLM can know historical outcomes, so querying it on
 old candles is not a reliable unbiased historical backtest. No profitability
 improvement is established by this integration, and no real orders are enabled.
+
+### Gemini configuration example
+
+```dotenv
+AI_ENABLED=1
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your_private_key
+AI_MODEL=your_available_gemini_model_id
+```
+
+Restart the backend after changing provider settings. You can keep both keys in
+your private environment, but choose one provider and matching model per run.
+Gemini requests use the `x-goog-api-key` header, never a URL query parameter.
+Blocked, truncated, empty, or malformed Gemini replies veto the entry just like
+OpenAI failures. Model availability, quotas, pricing and data handling depend on
+your selected provider/account. This integration does not make a paid request
+until enabled and an entry signal needs review.
+
+Gemini API references: [structured outputs](https://ai.google.dev/gemini-api/docs/generate-content/structured-output)
+and [Generate Content](https://ai.google.dev/api/generate-content).
