@@ -7,6 +7,10 @@ const { computeMetrics } = require("./metrics");
 const { Runner, SYMBOLS, INTERVAL, POLL_SECONDS, START_BALANCE, RUNNER_BALANCE, LEVERAGE, strategy } = require("./index");
 const { runFuturesBacktest } = require("./futuresBacktester");
 
+const { AIEntryFilter } = require("./aiFilter");
+const { AIMonitor } = require("./aiMonitor");
+const aiMonitor = new AIMonitor(new AIEntryFilter());
+
 const PORT = Number(process.env.API_PORT || 4000);
 const HOST = process.env.API_HOST || "127.0.0.1";
 const API_KEY = process.env.API_KEY || "";
@@ -289,6 +293,14 @@ async function handler(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname !== "/api/health" && !authorized(req)) return json(res, 401, { error: "unauthorized" });
     try {
+        if (req.method === "GET" && url.pathname === "/api/ai") {
+            return json(res, 200, { ...aiMonitor.snapshot(SYMBOLS), running, interval: INTERVAL, strategy: strategy.name });
+        }
+        if (req.method === "POST" && url.pathname === "/api/ai/test") {
+            const result = await aiMonitor.testConnection();
+            const { status, ...body } = result;
+            return json(res, status, body);
+        }
         await initRunners();
         if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true, mode: "FUTURES_PAPER", marketType: "USDⓈ-M FUTURES", liveOrdersEnabled: false, running, time: Date.now() });
         if (req.method === "GET" && url.pathname === "/api/events") {

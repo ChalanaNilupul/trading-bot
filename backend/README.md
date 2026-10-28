@@ -128,3 +128,26 @@ until enabled and an entry signal needs review.
 
 Gemini API references: [structured outputs](https://ai.google.dev/gemini-api/docs/generate-content/structured-output)
 and [Generate Content](https://ai.google.dev/api/generate-content).
+
+## AI Monitor dashboard
+
+Open **AI Monitor** in the dashboard sidebar to see enabled/disabled status,
+provider/model, whether the key is configured (the key is never returned),
+confidence threshold, timeout, and the latest 100 saved entry reviews. Missing
+history files show “No trading reviews yet”; files are created after the first
+eligible review. The earlier terminal connection-test command does not write a
+review file.
+
+**Test connection** sends one explicitly requested provider call with no candle
+data and never opens a position. A valid rejection counts as a successful
+connection. Tests may incur API charges; the button has a 30-second server-side
+cooldown. Results are saved separately from trade reviews and survive restarts.
+No AI calls are made by viewing or refreshing the monitor.
+
+Authenticated routes: `GET /api/ai` (safe config/history) and `POST /api/ai/test`
+(connection test). Both pass through the dashboard's server-side proxy. Backend
+credentials stay in `backend/.env`; use `node --env-file=.env src/api.js` with
+Node 20.6+ so that file is loaded. Keep `BOT_API_KEY` in `dashboard/.env.local`
+identical to backend `API_KEY`, and set `BOT_API_URL=http://127.0.0.1:4000`.
+Restart both services after updating. The UI refreshes monitor data every five
+seconds, independently of market scanning.

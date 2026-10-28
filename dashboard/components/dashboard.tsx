@@ -35,6 +35,8 @@ import { StrategiesPage } from "./dashboard/pages/StrategiesPage";
 import { RiskPage } from "./dashboard/pages/RiskPage";
 import { SettingsPage } from "./dashboard/pages/SettingsPage";
 
+import { AIPage } from "./dashboard/pages/AIPage";
+
 const nav = [
   ["Overview", LayoutDashboard],
   ["Markets", Radar],
@@ -42,6 +44,7 @@ const nav = [
   ["Trades", Activity],
   ["Backtests", BarChart3],
   ["Strategies", SlidersHorizontal],
+  ["AI Monitor", Bot],
   ["Risk", ShieldCheck],
 ] as const;
 
@@ -342,6 +345,9 @@ export default function Dashboard() {
           />
         );
 
+      case "AI Monitor":
+        return <AIPage />;
+
       case "Risk":
         return (
           <RiskPage
@@ -545,7 +551,7 @@ export default function Dashboard() {
                 <div className="mt-2 text-xs text-red-300/70">
                   Start the API with{" "}
                   <code className="rounded bg-black/30 px-1.5 py-0.5">
-                    npm run api
+                    node --env-file=.env src/api.js
                   </code>{" "}
                   in your backend folder.
                 </div>
