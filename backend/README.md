@@ -70,3 +70,36 @@ npm test
 ```
 
 Tests cover strategy causality, existing spot engine regression tests, futures long/short accounting paths, isolated liquidation simulation, funding-boundary handling, and state restoration.
+
+## Optional OpenAI entry review
+
+AI is **disabled by default**. It is an experimental veto on strategy BUY/SHORT
+entries in the continuous paper runner (CLI and API). It never creates signals,
+changes sizing/stops/leverage, or blocks exits. Existing positions do not wait on
+AI. Only the latest closed candle is reviewed; the last 60 closed candles and
+strategy indicators are sent to OpenAI. No account credentials are sent.
+
+1. Copy `.env.example` to `.env` inside `backend`.
+2. Set `AI_ENABLED=1`, your backend-only `OPENAI_API_KEY`, and `AI_MODEL` to a
+   model in your project that supports Chat Completions structured outputs.
+3. For the dashboard, set `API_KEY` separately (at least 16 characters).
+4. With Node 20.6+, run `node --env-file=.env src/index.js` for CLI paper trading,
+   or `node --env-file=.env src/api.js` for the dashboard backend. On Node 18,
+   export variables through your shell/process manager; `.env` is not auto-loaded.
+
+Do not put the OpenAI key in browser code or `NEXT_PUBLIC_*` variables. Never
+commit `.env`. Requests use the fixed official OpenAI endpoint, an 8-second
+configurable timeout, structured responses, and no retries. API failures,
+refusals, invalid output, and low confidence veto new entries. Confidence is a
+subjective model score, **not** a win probability. Reviews incur API charges.
+Decisions are recorded in `data/ai_SYMBOL.jsonl`; the latest review is included
+in the runner's signal note. Execution price is refreshed after the review.
+
+Historical backtests and market scans remain strategy-only: **they do not
+validate AI-filtered performance**. Compare separate baseline and AI paper runs
+on the same dates and symbols, with fees, slippage and funding; keep their data
+directories separate. Evaluate net return, drawdown, number of trades and API
+cost over an adequate unseen sample. Do not tune confidence or strategy settings
+on the evaluation period. An LLM can know historical outcomes, so querying it on
+old candles is not a reliable unbiased historical backtest. No profitability
+improvement is established by this integration, and no real orders are enabled.

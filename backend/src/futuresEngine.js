@@ -101,6 +101,7 @@ class FuturesEngine {
         this.pending = { type: "CLOSE", reason: "SIGNAL" };
       else if (
         !this.position &&
+        analysis.entryAllowed !== false &&
         (analysis.signal === "BUY" ||
           (analysis.signal === "SHORT" && this.cfg.allowShort))
       ) {
