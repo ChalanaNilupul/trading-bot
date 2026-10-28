@@ -111,7 +111,7 @@ async function getTopUSDTSymbols({ limit = 30, minQuoteVolume = 20_000_000 } = {
 /** Exchange trading rules: lot step and min order value (needed to size real orders correctly). */
 async function getSymbolFilters(symbol) {
     const info = await request(`${BASE_URL}/api/v3/exchangeInfo?symbol=${encodeURIComponent(symbol)}`);
-    const s = info.symbols?.[0];
+    const s = info.symbols?.find(item => item.symbol === symbol);
     if (!s) throw new Error(`Symbol not found: ${symbol}`);
 
     const lot = s.filters.find(f => f.filterType === "LOT_SIZE");
@@ -173,7 +173,7 @@ async function getFuturesTickerPrice(symbol) {
 
 async function getFuturesSymbolFilters(symbol) {
     const info = await request(`${FUTURES_URL}/fapi/v1/exchangeInfo?symbol=${encodeURIComponent(symbol)}`);
-    const s = info.symbols?.[0];
+    const s = info.symbols?.find(item => item.symbol === symbol);
     if (!s) throw new Error(`Futures symbol not found: ${symbol}`);
     const lot = s.filters.find(f => f.filterType === "LOT_SIZE");
     const marketLot = s.filters.find(f => f.filterType === "MARKET_LOT_SIZE") || lot;

@@ -19,6 +19,7 @@ const { FuturesEngine } = require("./futuresEngine");
 const { computeMetrics } = require("./metrics");
 const store = require("./store");
 const { notify } = require("./notify");
+const { AIEntryFilter } = require("./aiFilter");
 
 const DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,AVAXUSDT,LINKUSDT";
 const SYMBOLS = (process.env.SYMBOLS || process.env.SYMBOL || DEFAULT_SYMBOLS).split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -39,6 +40,7 @@ const fmtPF = pf => (pf === Infinity ? "inf" : pf.toFixed(2));
 class Runner {
     constructor(symbol, options = {}) {
         this.symbol = symbol;
+        this.aiFilter = options.aiFilter || new AIEntryFilter();
         this.strategy = options.strategy || strategy;
         this.lastProcessed = null;
         this.resetToken = null;
@@ -105,10 +107,29 @@ class Runner {
             log(`${this.symbol}: not enough candle data`);
             return false;
         }
-        return this.processCandles(candles, observedPrice, Date.now());
+        let decision = null;
+        const latest = candles[candles.length - 1];
+        if (this.aiFilter.enabled && !this.engine.position && (this.lastProcessed === null || latest.closeTime > this.lastProcessed)) {
+            const series = buildSeries(candles);
+            const ctx = this.strategy.prepare(candles, series);
+            const analysis = this.strategy.analyze(ctx, candles, series, candles.length - 1);
+            if (analysis.signal === "BUY" || analysis.signal === "SHORT") {
+                decision = await this.aiFilter.evaluate({
+                    symbol: this.symbol, interval: INTERVAL, strategy: this.strategy.name,
+                    signal: analysis.signal, indicators: analysis.indicators,
+                    candles: candles.slice(-60),
+                });
+                store.appendLine(`data/ai_${this.symbol}.jsonl`, {
+                    candleTime: latest.closeTime, model: this.aiFilter.model, ...decision,
+                });
+            }
+        }
+        // Refresh the execution quote after waiting for the AI; keep the original closed candles.
+        const price = decision ? await getFuturesTickerPrice(this.symbol) : observedPrice;
+        return this.processCandles(candles, price, Date.now(), decision);
     }
 
-    processCandles(candles, observedPrice, executionTime) {
+    processCandles(candles, observedPrice, executionTime, entryDecision = null) {
         if (!Number.isFinite(observedPrice) || observedPrice <= 0) {
             throw new Error(`Invalid observed execution price for ${this.symbol}`);
         }
@@ -136,7 +157,11 @@ class Runner {
             const analysis = isLatest
                 ? this.strategy.analyze(ctx, candles, series, i)
                 : null;
-            this.engine.onCandle(candles[i], analysis, {
+            const gatedAnalysis = analysis && {
+                ...analysis,
+                entryAllowed: !this.aiFilter.enabled || entryDecision?.allowed === true,
+            };
+            this.engine.onCandle(candles[i], gatedAnalysis, {
                 deferPending: !isLatest,
                 immediate: isLatest,
                 executionPrice: observedPrice,
@@ -145,7 +170,7 @@ class Runner {
             this.lastProcessed = candles[i].closeTime;
             if (isLatest) {
                 this.lastPrice = observedPrice;
-                this.lastNote = `${analysis.signal} | ${this.strategy.describe ? this.strategy.describe(ctx, candles, series, i) : ""}`;
+                this.lastNote = `${analysis.signal}${entryDecision ? ` | AI ${entryDecision.allowed ? "approve" : "veto"}: ${entryDecision.reason}` : ""} | ${this.strategy.describe ? this.strategy.describe(ctx, candles, series, i) : ""}`;
             }
         }
 
