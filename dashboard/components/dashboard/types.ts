@@ -30,6 +30,7 @@ export type Status = {
     mode: string;
   };
   mode: string;
+  direction?: string;
   running: boolean;
   strategy: string;
   interval: string;
@@ -73,6 +74,7 @@ export type Trade = {
 export type BacktestResult = {
   config: {
     symbol: string;
+    direction?: string;
     interval: string;
     candlesRequested: number;
     candlesUsed: number;

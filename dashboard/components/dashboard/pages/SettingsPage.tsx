@@ -48,6 +48,8 @@ export function SettingsPage({ status, busy, command, load }: {
               value={status?.running ? "Running" : "Stopped"}
             />
 
+            <ConfigRow label="Coin(s)" value={status?.runners.map(r => r.symbol).join(", ") || "—"} />
+            <ConfigRow label="Direction" value={status?.direction || "LONG"} />
             <ConfigRow label="Strategy" value={status?.strategy || "—"} />
 
             <ConfigRow label="Interval" value={status?.interval || "—"} />

@@ -20,6 +20,7 @@ const POST_ALLOWED = new Set([
   "/api/bot/tick",
   "/api/risk/reset-halt",
   "/api/backtest",
+  "/api/train",
   "/api/ai/test",
 ]);
 
@@ -71,7 +72,7 @@ async function forward(
       headers,
       body,
       cache: "no-store",
-      signal: AbortSignal.timeout(route === "/api/backtest" ? 120_000 : route === "/api/ai/test" ? 35_000 : 15_000),
+      signal: AbortSignal.timeout(["/api/backtest", "/api/train"].includes(route) ? 120_000 : route === "/api/ai/test" ? 35_000 : 15_000),
     });
     return new NextResponse(await res.text(), {
       status: res.status,

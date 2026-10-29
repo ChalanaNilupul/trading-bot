@@ -151,3 +151,66 @@ Node 20.6+ so that file is loaded. Keep `BOT_API_KEY` in `dashboard/.env.local`
 identical to backend `API_KEY`, and set `BOT_API_URL=http://127.0.0.1:4000`.
 Restart both services after updating. The UI refreshes monitor data every five
 seconds, independently of market scanning.
+
+## Single coin, long-only or short-only paper bot
+
+The **Single Coin Lab** dashboard page compares fixed presets for one symbol,
+one direction and one timeframe. This is historical research, not ML model
+training, Gemini fine-tuning, or Binance Grid trading. A LONG profile only opens
+longs; a SHORT profile uses explicit bearish entries and buys to cover. Stop,
+liquidation, funding and risk handling use the same Futures engine in research
+and paper runs. The old `SHORTS` variable is superseded by `DIRECTION`.
+
+1. Choose a coin, LONG/SHORT, timeframe and 1,500–20,000 candles in the lab.
+2. Compare presets. The first 60% trains/screens, the next 20% selects the
+   candidate, and only that candidate is evaluated on the last 20%. Indicator
+   warmup reduces usable training data. Changing settings after seeing the
+   final segment makes it development data; use a new untouched period next.
+3. A candidate must have positive training return and PF >1; validation needs
+   at least 30 trades, PF >=1.2, positive return and drawdown <=10%. The final
+   screen needs >=10 trades, positive return, PF >1 and drawdown <=10%.
+   These fixed research filters do not establish statistical significance or
+   future profitability. No candidate is a valid outcome.
+4. Only after a historical pass does the lab produce `.env` settings. They are
+   never applied automatically. Stop the old profile, review/close its paper
+   positions, replace the settings in `backend/.env`, restart, and click Start
+   bot. Forward paper testing is still necessary. The current running profile
+   is displayed separately from the lab's selections.
+
+For manual single-coin research, set these in `backend/.env` (example only):
+
+```dotenv
+BOT_SYMBOL=BTCUSDT
+DIRECTION=SHORT
+STRATEGY=Breakout 50/20
+INTERVAL=4h
+START_BALANCE=1000
+LEVERAGE=1
+RISK_PERCENT=0.0025
+MAX_MARGIN_PERCENT=0.10
+```
+
+`BOT_SYMBOL` overrides `SYMBOLS`/`SYMBOL` and must be one symbol. The full
+configured paper wallet belongs to that one runner. `DIRECTION` defaults to LONG;
+BOTH is supported by the backend for research but is not the single-direction
+lab mode. The original scoring strategy has no short implementation and is
+rejected for SHORT/BOTH. Breakout shorts enter below the prior entry-channel
+low while below SMA200 and cover above the exit-channel high. EMA shorts use a
+bearish EMA stack and rejection of EMA20; RSI shorts sell overbought rallies
+below SMA200; trend shorts require price and SMA50 below SMA200. A long exit
+SELL is never blindly converted into a short entry.
+
+Explicit single-coin/direction profiles use direction-specific state and trade
+filenames, separate from previous multi-coin paper state. Switching profiles
+does not transfer or close the old positions. The shared portfolio risk state
+is retained; changing direction must not silently reset its halt. Backtest
+results show the requested direction and do not activate paper settings.
+
+The lab is authenticated `POST /api/train`. It makes no AI calls, assumes
+estimated fees/slippage/fixed funding, uses 1x leverage and 0.25% planned risk,
+and disables backtest auto-resume after a halt. It does not simulate the shared
+portfolio risk manager. The running paper bot still uses the existing AI and
+portfolio risk gates. Research reports are displayed for the current page
+session; they are not trained model files. The existing CLI `npm run tournament`
+also respects `BOT_SYMBOL` and `DIRECTION` and includes direction in its CSV names;
+it remains exploratory because its ranking uses out-of-sample results.

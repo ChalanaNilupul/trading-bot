@@ -15,7 +15,9 @@ const list = (value, fallback) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-const COINS = list(process.env.COINS, "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT");
+const { normalizeDirection } = require("./direction");
+const DIRECTION = normalizeDirection(process.env.DIRECTION || "LONG");
+const COINS = list(process.env.BOT_SYMBOL || process.env.COINS, "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT");
 
 const TIMEFRAMES = list(process.env.TIMEFRAMES, "1h,4h");
 
@@ -68,7 +70,7 @@ async function main() {
   console.log("\n==================================");
   console.log("       FUTURES TOURNAMENT");
   console.log("==================================");
-  console.log(`Coins: ${COINS.join(", ")}`);
+  console.log(`Coins: ${COINS.join(", ")} | Direction: ${DIRECTION}`);
   console.log(`Timeframes: ${TIMEFRAMES.join(", ")}`);
   console.log(`Strategies: ${STRATEGY_LIST.length}`);
   console.log(`Candles: ${CANDLES} | Balance: ${START_BALANCE}`);
@@ -120,7 +122,7 @@ async function main() {
               startingBalance: START_BALANCE,
               leverage: LEVERAGE,
               split: SPLIT,
-              allowShort: false,
+              direction: DIRECTION,
               trailing,
             });
 
@@ -133,6 +135,7 @@ async function main() {
 
             const row = {
               trailingMode,
+              direction: DIRECTION,
               strategy: strategy.name,
               coin,
               timeframe,
@@ -181,6 +184,7 @@ async function main() {
     fs.mkdirSync("data", { recursive: true });
 
     const detailColumns = [
+      "direction",
       "trailingMode",
       "strategy",
       "coin",
@@ -211,7 +215,7 @@ async function main() {
       fs.writeFileSync(
         path.join(
           "data",
-          `futures_tournament_details_trailing_${mode.toLowerCase()}.csv`,
+          `futures_tournament_details_${DIRECTION.toLowerCase()}_trailing_${mode.toLowerCase()}.csv`,
         ),
         detailCsv.join("\n"),
       );
@@ -276,7 +280,7 @@ async function main() {
       fs.writeFileSync(
         path.join(
           "data",
-          `futures_tournament_ranked_trailing_${mode.toLowerCase()}.csv`,
+          `futures_tournament_ranked_${DIRECTION.toLowerCase()}_trailing_${mode.toLowerCase()}.csv`,
         ),
         summaryCsv.join("\n"),
       );
@@ -301,3 +305,4 @@ main().catch((error) => {
   console.error("Tournament error:", error);
   process.exitCode = 1;
 });
+

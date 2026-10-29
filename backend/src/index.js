@@ -19,17 +19,18 @@ const {
   getFuturesSymbolFilters,
 } = require("./binance");
 const { buildSeries, WARMUP } = require("./indicators");
-const { findStrategy, DEFAULT_STRATEGY } = require("./strategies");
+const { DEFAULT_STRATEGY } = require("./strategies");
 const { FuturesEngine } = require("./futuresEngine");
 const { computeMetrics } = require("./metrics");
 const store = require("./store");
 const { notify } = require("./notify");
 const { AIEntryFilter } = require("./aiFilter");
+const { directedStrategy, normalizeDirection } = require("./direction");
 const { PortfolioRiskManager } = require("./portfolioRiskManager");
 
 const DEFAULT_SYMBOLS =
   "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,AVAXUSDT,LINKUSDT";
-const SYMBOLS = (process.env.SYMBOLS || process.env.SYMBOL || DEFAULT_SYMBOLS)
+const SYMBOLS = (process.env.BOT_SYMBOL || process.env.SYMBOLS || process.env.SYMBOL || DEFAULT_SYMBOLS)
   .split(",")
   .map((s) => s.trim().toUpperCase())
   .filter(Boolean);
@@ -40,8 +41,9 @@ const LEVERAGE = Number(process.env.LEVERAGE || 5);
 const RUNNER_BALANCE = START_BALANCE / SYMBOLS.length;
 const ONE_SHOT = process.env.ONE_SHOT === "1";
 
-const strategy = findStrategy(process.env.STRATEGY || DEFAULT_STRATEGY);
-const slug = strategy.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+const DIRECTION = normalizeDirection(process.env.DIRECTION || "LONG");
+if (process.env.BOT_SYMBOL && (SYMBOLS.length !== 1 || !/^[A-Z0-9]{3,30}$/.test(SYMBOLS[0]))) throw new Error("BOT_SYMBOL must contain exactly one valid symbol");
+const strategy = directedStrategy(process.env.STRATEGY || DEFAULT_STRATEGY, DIRECTION);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
@@ -104,11 +106,14 @@ class Runner {
     this.symbol = symbol;
     this.aiFilter = options.aiFilter || new AIEntryFilter();
     this.strategy = options.strategy || strategy;
+    this.direction = options.direction || DIRECTION;
+    const runnerSlug = this.strategy.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const suffix = process.env.BOT_SYMBOL || process.env.DIRECTION || options.direction ? `_${this.direction.toLowerCase()}` : "";
     this.lastProcessed = null;
     this.resetToken = null;
     this.errors = 0;
-    this.stateFile = `data/state_futures_${symbol}_${INTERVAL}_${slug}.json`;
-    this.tradeLog = `data/trades_futures_${symbol}_${INTERVAL}_${slug}.jsonl`;
+    this.stateFile = `data/state_futures_${symbol}_${INTERVAL}_${runnerSlug}${suffix}.json`;
+    this.tradeLog = `data/trades_futures_${symbol}_${INTERVAL}_${runnerSlug}${suffix}.jsonl`;
     this.engine =
       options.engine ||
       new FuturesEngine({
@@ -119,7 +124,8 @@ class Runner {
         fundingRatePer8h: Number(process.env.FUNDING_RATE_8H || 0.0001),
         riskPercent: Number(process.env.RISK_PERCENT || 0.01),
         maxPositionPercent: Number(process.env.MAX_MARGIN_PERCENT || 0.25),
-        allowShort: process.env.SHORTS === "1",
+        allowShort: this.direction !== "LONG",
+        direction: this.direction,
         keepEquityCurve: false,
         ...this.strategy.engine,
         onEvent: (e) => this.onEvent(e),
@@ -150,6 +156,7 @@ class Runner {
 
   async init(loadFilters = true) {
     const saved = store.load(this.stateFile);
+    if (saved?.engine?.position && this.direction !== "BOTH" && saved.engine.position.side !== this.direction) throw new Error("Saved position direction differs from this bot profile");
     if (saved) {
       this.engine.restore(saved.engine);
       this.lastProcessed = saved.lastProcessed ?? null;
@@ -205,11 +212,12 @@ class Runner {
         series,
         candles.length - 1,
       );
-      if (analysis.signal === "BUY" || analysis.signal === "SHORT") {
+      if ((analysis.signal === "BUY" && this.direction !== "SHORT") || (analysis.signal === "SHORT" && this.direction !== "LONG")) {
         decision = await this.aiFilter.evaluate({
           symbol: this.symbol,
           interval: INTERVAL,
           strategy: this.strategy.name,
+          direction: this.direction,
           signal: analysis.signal,
           indicators: analysis.indicators,
           candles: candles.slice(-60),
@@ -251,6 +259,7 @@ class Runner {
       this.lastPrice = observedPrice;
       return false;
     }
+    this.lastPrice = observedPrice;
     const latestNewIndex = newIndices[newIndices.length - 1];
     if (
       this.engine.pending?.type === "OPEN_LONG" ||
@@ -270,7 +279,7 @@ class Runner {
 
       const isEntryCandidate =
         analysis &&
-        ["BUY", "SHORT"].includes(analysis.signal) &&
+        ((analysis.signal === "BUY" && this.direction !== "SHORT") || (analysis.signal === "SHORT" && this.direction !== "LONG")) &&
         !this.engine.position;
 
       if (isEntryCandidate) {
@@ -338,7 +347,7 @@ class Runner {
       this.lastProcessed = candles[i].closeTime;
       if (isLatest) {
         this.lastPrice = observedPrice;
-        this.lastNote = `${analysis.signal}${entryDecision ? ` | AI ${entryDecision.allowed ? "approve" : "veto"}: ${entryDecision.reason}` : ""} | ${this.strategy.describe ? this.strategy.describe(ctx, candles, series, i) : ""}`;
+        this.lastNote = `${analysis.signal}${!portfolioAllowed ? ` | Portfolio blocked: ${portfolioReason}` : ""}${entryDecision ? ` | AI ${entryDecision.allowed ? "approve" : "veto"}: ${entryDecision.reason}` : ""} | ${this.strategy.describe ? this.strategy.describe(ctx, candles, series, i) : ""}`;
       }
     }
 
@@ -473,4 +482,10 @@ module.exports = {
   RUNNER_BALANCE,
   LEVERAGE,
   strategy,
+  DIRECTION,
+  portfolioRisk,
+  buildPortfolioSnapshot,
+  persistPortfolioRisk,
+  restorePortfolioRisk: () => portfolioRisk.restore(store.load(PORTFOLIO_STATE_FILE)),
 };
+
