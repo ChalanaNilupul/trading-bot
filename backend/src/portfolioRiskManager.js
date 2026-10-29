@@ -8,8 +8,8 @@
  * existing engine implementation and can be unit-tested in isolation.
  */
 const DEFAULTS = Object.freeze({
-  maxDailyLossPct: 0.01,       // 1% of portfolio equity at UTC day start
-  maxDrawdownPct: 0.05,        // 5% from observed portfolio peak
+  maxDailyLossPct: 0.01, // 1% of portfolio equity at UTC day start
+  maxDrawdownPct: 0.05, // 5% from observed portfolio peak
   maxOpenPositions: 1,
   maxAggregateStopRiskPct: 0.01, // planned stop risk across all positions + candidate
   maxSameDirectionPositions: 1,
@@ -26,9 +26,13 @@ function normalizePosition(position) {
   const side = String(position?.side || "").toUpperCase();
   const symbol = String(position?.symbol || "").toUpperCase();
 
-  if (!symbol || !["LONG", "SHORT"].includes(side) ||
-      !finitePositive(quantity) || !finitePositive(entryPrice) ||
-      !finitePositive(stopPrice)) {
+  if (
+    !symbol ||
+    !["LONG", "SHORT"].includes(side) ||
+    !finitePositive(quantity) ||
+    !finitePositive(entryPrice) ||
+    !finitePositive(stopPrice)
+  ) {
     return null;
   }
 
@@ -80,13 +84,11 @@ class PortfolioRiskManager {
 
     if (!this.state.halted && dailyLossPct >= this.cfg.maxDailyLossPct) {
       this.state.halted = true;
-      this.state.haltReason =
-        `Portfolio daily loss limit reached (${(dailyLossPct * 100).toFixed(2)}%)`;
+      this.state.haltReason = `Portfolio daily loss limit reached (${(dailyLossPct * 100).toFixed(2)}%)`;
     }
     if (!this.state.halted && drawdownPct >= this.cfg.maxDrawdownPct) {
       this.state.halted = true;
-      this.state.haltReason =
-        `Portfolio max drawdown reached (${(drawdownPct * 100).toFixed(2)}%)`;
+      this.state.haltReason = `Portfolio max drawdown reached (${(drawdownPct * 100).toFixed(2)}%)`;
     }
 
     return {
@@ -96,7 +98,9 @@ class PortfolioRiskManager {
       drawdownPct,
     };
   }
-
+  update({ equity, timestamp } = {}) {
+    return this._updateEquityState(Number(equity), Number(timestamp));
+  }
   /**
    * Decide whether a candidate entry may be opened.
    *
@@ -107,24 +111,36 @@ class PortfolioRiskManager {
    * @param {object} input.candidate - {symbol, side, estimatedStopRisk}
    */
   canOpen({ equity, timestamp, positions = [], candidate } = {}) {
-    const stateCheck = this._updateEquityState(Number(equity), Number(timestamp));
+    const stateCheck = this._updateEquityState(
+      Number(equity),
+      Number(timestamp),
+    );
     if (!stateCheck.allowed) return stateCheck;
 
-    if (!candidate || !candidate.symbol ||
-        !["LONG", "SHORT"].includes(String(candidate.side || "").toUpperCase())) {
+    if (
+      !candidate ||
+      !candidate.symbol ||
+      !["LONG", "SHORT"].includes(String(candidate.side || "").toUpperCase())
+    ) {
       return { allowed: false, reason: "invalid candidate" };
     }
 
     const normalizedPositions = positions.map(normalizePosition);
     if (normalizedPositions.some((position) => position === null)) {
-      return { allowed: false, reason: "invalid existing position data; fail-closed" };
+      return {
+        allowed: false,
+        reason: "invalid existing position data; fail-closed",
+      };
     }
     const open = normalizedPositions;
     const symbol = String(candidate.symbol).toUpperCase();
     const side = String(candidate.side).toUpperCase();
 
     if (open.some((p) => p.symbol === symbol)) {
-      return { allowed: false, reason: `${symbol} already has an open position` };
+      return {
+        allowed: false,
+        reason: `${symbol} already has an open position`,
+      };
     }
     if (open.length >= this.cfg.maxOpenPositions) {
       return { allowed: false, reason: "portfolio max open positions reached" };
@@ -132,7 +148,10 @@ class PortfolioRiskManager {
 
     const sameDirection = open.filter((p) => p.side === side).length;
     if (sameDirection >= this.cfg.maxSameDirectionPositions) {
-      return { allowed: false, reason: `portfolio max ${side.toLowerCase()} positions reached` };
+      return {
+        allowed: false,
+        reason: `portfolio max ${side.toLowerCase()} positions reached`,
+      };
     }
 
     const candidateRisk = Number(candidate.estimatedStopRisk);
@@ -172,7 +191,10 @@ class PortfolioRiskManager {
    * Pass the verified combined portfolio equity.
    */
   reset({ equity, timestamp } = {}) {
-    if (!finitePositive(Number(equity)) || !Number.isFinite(Number(timestamp))) {
+    if (
+      !finitePositive(Number(equity)) ||
+      !Number.isFinite(Number(timestamp))
+    ) {
       throw new Error("reset requires a valid combined equity and timestamp");
     }
     const time = Number(timestamp);
@@ -198,8 +220,13 @@ class PortfolioRiskManager {
   restore(saved = {}) {
     if (!saved || typeof saved !== "object") return;
     const allowedKeys = [
-      "utcDay", "dayStartEquity", "peakEquity", "halted",
-      "haltReason", "lastEquity", "updatedAt",
+      "utcDay",
+      "dayStartEquity",
+      "peakEquity",
+      "halted",
+      "haltReason",
+      "lastEquity",
+      "updatedAt",
     ];
     for (const key of allowedKeys) {
       if (Object.prototype.hasOwnProperty.call(saved, key)) {

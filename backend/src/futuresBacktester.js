@@ -35,14 +35,16 @@ function priceReturnPct(candles, start, end) {
     !Number.isFinite(last) ||
     first <= 0 ||
     end <= start
-  ) return 0;
-  return ((last / first) - 1) * 100;
+  )
+    return 0;
+  return (last / first - 1) * 100;
 }
 
 function runSegment({ candles, strategy, config, filters, start, end }) {
   const engine = new FuturesEngine({
     ...config,
     ...strategy.engine,
+    trailing: config.trailing ?? strategy.engine?.trailing,
     ...filters,
     allowShort: config.allowShort,
     startingBalance: config.startingBalance,
@@ -122,6 +124,7 @@ async function runFuturesBacktest(options = {}) {
     maxTradesPerDay: Number(options.maxTradesPerDay ?? 6),
     haltResumeDays: Number(options.haltResumeDays ?? 7),
     allowShort: options.allowShort === true,
+    trailing: options.trailing,
     split: Math.max(0.5, Math.min(0.9, Number(options.split ?? 0.7))),
   };
   if (!SYMBOL_RE.test(config.symbol)) throw new Error("Invalid symbol");
@@ -152,18 +155,21 @@ async function runFuturesBacktest(options = {}) {
   }
 
   const strategy = findStrategy(config.strategyName);
-  const candles = await getFuturesHistoricalCandles(
-    config.symbol,
-    config.interval,
-    config.candles,
-  );
+  const candles = Array.isArray(options.candlesData)
+    ? options.candlesData
+    : await getFuturesHistoricalCandles(
+        config.symbol,
+        config.interval,
+        config.candles,
+      );
   if (candles.length < WARMUP + 100)
     throw new Error(
       `Not enough USDⓈ-M Futures candles (${candles.length}); need at least ${WARMUP + 100}`,
     );
-  const filters = await getFuturesSymbolFilters(config.symbol).catch(
-    () => ({}),
-  );
+  const filters =
+    options.filters && typeof options.filters === "object"
+      ? options.filters
+      : await getFuturesSymbolFilters(config.symbol).catch(() => ({}));
   const splitIndex = Math.max(
     WARMUP + 1,
     Math.floor(candles.length * config.split),

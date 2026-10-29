@@ -378,6 +378,9 @@ test("delayed polling executes the latest signal at the current observed price",
   runner.persist = () => {};
   runner.lastProcessed = data[ind.WARMUP].closeTime;
 
+  runner.allRunners = [runner];
+  runner.lastPrice = 100;
+
   runner.processCandles(data, 112, T + 5 * 60_000);
 
   assert.equal(engine.position.entryPrice, 112);

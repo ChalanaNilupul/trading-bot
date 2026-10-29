@@ -71,7 +71,9 @@ class FuturesEngine {
         execution.executionPrice <= 0 ||
         !Number.isFinite(execution.executionTime))
     ) {
-      throw new Error("Immediate execution requires a valid observed price and time");
+      throw new Error(
+        "Immediate execution requires a valid observed price and time",
+      );
     }
     if (this.pending && !execution.deferPending && !immediate)
       this._executePending(candle, candle.open, candle.openTime);
@@ -154,7 +156,13 @@ class FuturesEngine {
     );
   }
 
-  _open(candle, side, atr, referencePrice = candle.open, executionTime = candle.openTime) {
+  _open(
+    candle,
+    side,
+    atr,
+    referencePrice = candle.open,
+    executionTime = candle.openTime,
+  ) {
     const c = this.cfg,
       fill = this._marketFill(referencePrice, side === "LONG" ? "BUY" : "SELL");
     const equity = this.equity(fill);
@@ -335,11 +343,32 @@ class FuturesEngine {
         p.side === "LONG"
           ? p.extreme - p.stopDistance
           : p.extreme + p.stopDistance;
+
       if (p.side === "LONG" ? trail > p.stopPrice : trail < p.stopPrice) {
         p.stopPrice = trail;
+
         this._emit("TRAIL", `Stop moved to ${trail.toFixed(4)}`, {
           stop: trail,
         });
+
+        // Conservative assumption: the new trailing stop may have been
+        // reached later in this same candle.
+        const newStopHit =
+          p.side === "LONG" ? candle.low <= trail : candle.high >= trail;
+
+        if (newStopHit) {
+          const raw =
+            p.side === "LONG"
+              ? Math.min(candle.open, trail)
+              : Math.max(candle.open, trail);
+
+          this._close(
+            this._marketFill(raw, p.side === "LONG" ? "SELL" : "BUY"),
+            candle.closeTime,
+            "TRAILING STOP",
+          );
+          return;
+        }
       }
     }
   }
