@@ -1,0 +1,23 @@
+{
+  "lastProcessed": 1791437399999,
+  "engine": {
+    "cash": 1000,
+    "position": null,
+    "pending": null,
+    "trades": [],
+    "peak": 1000,
+    "maxDrawdown": 0,
+    "guard": {
+      "peakEquity": 1000,
+      "dayKey": "2026-10-08",
+      "dayStartEquity": 1000,
+      "dayBlocked": false,
+      "tradesToday": 0,
+      "consecutiveLosses": 0,
+      "cooldownUntil": 0,
+      "halted": false,
+      "haltReason": null,
+      "haltedAt": null
+    }
+  }
+}
