@@ -3,10 +3,11 @@ const {
   getFuturesSymbolFilters,
 } = require("./binance");
 const { buildSeries, WARMUP } = require("./indicators");
-const { findStrategy, DEFAULT_STRATEGY } = require("./strategies");
+const { DEFAULT_STRATEGY } = require("./strategies");
 const { FuturesEngine, FUTURES_DEFAULTS } = require("./futuresEngine");
 const { computeMetrics } = require("./metrics");
 const { intervalMs } = require("./data");
+const { directedStrategy, normalizeDirection } = require("./direction");
 
 const INTERVALS = new Set([
   "1m",
@@ -123,7 +124,8 @@ async function runFuturesBacktest(options = {}) {
     maxConsecutiveLosses: Number(options.maxConsecutiveLosses ?? 3),
     maxTradesPerDay: Number(options.maxTradesPerDay ?? 6),
     haltResumeDays: Number(options.haltResumeDays ?? 7),
-    allowShort: options.allowShort === true,
+    direction: normalizeDirection(options.direction ?? (options.allowShort === true ? "BOTH" : "LONG")),
+    allowShort: options.direction ? normalizeDirection(options.direction) !== "LONG" : options.allowShort === true,
     trailing: options.trailing,
     split: Math.max(0.5, Math.min(0.9, Number(options.split ?? 0.7))),
   };
@@ -154,7 +156,7 @@ async function runFuturesBacktest(options = {}) {
       throw new Error(`${key} must be a non-negative number`);
   }
 
-  const strategy = findStrategy(config.strategyName);
+  const strategy = directedStrategy(config.strategyName, config.direction);
   const candles = Array.isArray(options.candlesData)
     ? options.candlesData
     : await getFuturesHistoricalCandles(
@@ -258,3 +260,4 @@ async function runFuturesBacktest(options = {}) {
 }
 
 module.exports = { runFuturesBacktest, priceReturnPct };
+

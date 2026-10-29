@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import {
   Activity,
   BarChart3,
@@ -61,11 +63,12 @@ export function BacktestsPage({
   setBacktestCandles: (v: string) => void;
   backtestRunning: boolean;
   backtestResult: BacktestResult | null;
-  runBacktest: () => Promise<void>;
+  runBacktest: (direction?: string) => Promise<void>;
   backtestStrategy: string;
   setBacktestStrategy: (v: string) => void;
 }) {
   const result = backtestResult;
+  const [direction, setDirection] = useState("LONG");
 
   // if (!result?.config || !result?.period || !result?.full) {
   //   return (
@@ -107,10 +110,10 @@ export function BacktestsPage({
       <section className="glass rounded-2xl p-5">
         <SectionHeader
           title="Run a backtest"
-          description="Configure the historical simulation."
+          description="Choose a coin and direction. AI is excluded; backtesting never changes your running bot."
         />
 
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <InputSelect
             label="Strategy"
             value={backtestStrategy}
@@ -128,6 +131,7 @@ export function BacktestsPage({
               "Trend filter only",
             ]}
           />
+          <InputSelect label="Direction" value={direction} onChange={setDirection} options={["LONG", "SHORT"]} />
           <InputSelect
             label="Symbol"
             value={backtestSymbol}
@@ -157,7 +161,7 @@ export function BacktestsPage({
             <input
               type="number"
               min="500"
-              max="50000"
+              max="20000"
               value={backtestCandles}
               onChange={(e) => setBacktestCandles(e.target.value)}
               className="w-full rounded-xl border border-white/7 bg-white/[.03] px-3 py-2.5 text-sm text-zinc-300 outline-none focus:border-indigo-400/30"
@@ -167,7 +171,7 @@ export function BacktestsPage({
           <div className="flex items-end">
             <button
               disabled={backtestRunning}
-              onClick={runBacktest}
+              onClick={() => void runBacktest(direction)}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {backtestRunning ? (
@@ -617,6 +621,7 @@ export function BacktestsPage({
                   value={result.config?.symbol ?? "—"}
                 />
 
+                <ConfigRow label="Direction" value={result.config.direction || "LONG"} />
                 <ConfigRow label="Interval" value={result.config.interval} />
 
                 <ConfigRow

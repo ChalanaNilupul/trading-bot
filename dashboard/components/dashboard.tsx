@@ -37,12 +37,15 @@ import { SettingsPage } from "./dashboard/pages/SettingsPage";
 
 import { AIPage } from "./dashboard/pages/AIPage";
 
+import { SingleCoinLabPage } from "./dashboard/pages/SingleCoinLabPage";
+
 const nav = [
   ["Overview", LayoutDashboard],
   ["Markets", Radar],
   ["Positions", Wallet],
   ["Trades", Activity],
   ["Backtests", BarChart3],
+  ["Single Coin Lab", SlidersHorizontal],
   ["Strategies", SlidersHorizontal],
   ["AI Monitor", Bot],
   ["Risk", ShieldCheck],
@@ -238,7 +241,7 @@ export default function Dashboard() {
     ];
   }, [markets]);
 
-  const runBacktest = async () => {
+  const runBacktest = async (direction = "LONG") => {
     setBacktestRunning(true);
     setError("");
 
@@ -250,6 +253,7 @@ export default function Dashboard() {
         },
         body: JSON.stringify({
           symbol: backtestSymbol,
+          direction,
           strategy: backtestStrategy,
           interval: backtestInterval,
           candles: Number(backtestCandles),
@@ -344,6 +348,9 @@ export default function Dashboard() {
             equity={equity}
           />
         );
+
+      case "Single Coin Lab":
+        return <SingleCoinLabPage status={status} />;
 
       case "AI Monitor":
         return <AIPage />;

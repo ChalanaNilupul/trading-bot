@@ -4,8 +4,9 @@ const { getFuturesTickers24h, getFuturesCandles, getFuturesSymbolFilters } = req
 const { buildSeries, WARMUP } = require("./indicators");
 const store = require("./store");
 const { computeMetrics } = require("./metrics");
-const { Runner, SYMBOLS, INTERVAL, POLL_SECONDS, START_BALANCE, RUNNER_BALANCE, LEVERAGE, strategy } = require("./index");
+const { Runner, SYMBOLS, INTERVAL, POLL_SECONDS, START_BALANCE, RUNNER_BALANCE, LEVERAGE, strategy, DIRECTION, portfolioRisk, buildPortfolioSnapshot, persistPortfolioRisk, restorePortfolioRisk } = require("./index");
 const { runFuturesBacktest } = require("./futuresBacktester");
+const { trainSingleCoin } = require("./singleCoinLab");
 
 const { AIEntryFilter } = require("./aiFilter");
 const { AIMonitor } = require("./aiMonitor");
@@ -55,11 +56,14 @@ function recordEvent(level, category, message, details = {}) {
 }
 
 function createRunners() {
-    return SYMBOLS.map(symbol => new Runner(symbol));
+    const group = SYMBOLS.map(symbol => new Runner(symbol));
+    for (const runner of group) runner.allRunners = group;
+    return group;
 }
 
 async function initRunners(loadFilters = false) {
     if (runners.length) return;
+    restorePortfolioRisk();
     runners = createRunners();
     for (const runner of runners) {
         const originalOnEvent = runner.onEvent.bind(runner);
@@ -123,6 +127,7 @@ function runnerSnapshot(runner) {
     } : null;
     return {
         symbol: runner.symbol,
+        direction: runner.direction,
         price,
         equity,
         cash: e.cash,
@@ -211,6 +216,8 @@ function aggregate() {
         accountingModel: "ISOLATED_MARGIN_PER_SYMBOL_ACCOUNT",
         running,
         strategy: strategy.name,
+        direction: DIRECTION,
+        singleCoin: SYMBOLS.length === 1,
         interval: INTERVAL,
         symbols: SYMBOLS,
         pollSeconds: POLL_SECONDS,
@@ -223,6 +230,7 @@ function aggregate() {
 
 async function tickOnce() {
     await refreshTickers();
+    for (const runner of runners) runner.lastPrice = lastPrices.get(runner.symbol) ?? runner.lastPrice;
     let changed = false;
     for (const runner of runners) {
         try {
@@ -240,6 +248,8 @@ async function tickOnce() {
             console.error(`${runner.symbol}: ${error.message}`);
         }
     }
+    const snapshot = buildPortfolioSnapshot(runners);
+    if (snapshot.valid) { portfolioRisk.update({ equity: snapshot.equity, timestamp: Date.now() }); persistPortfolioRisk(); }
     return changed;
 }
 
@@ -275,6 +285,7 @@ function stopBot() {
     running = false;
     recordEvent("warn", "BOT_STOP", "Paper engine stop requested; saving runner state", { source: "system" });
     runners.forEach(r => r.persist());
+    persistPortfolioRisk();
 }
 
 async function json(res, status, body) {
@@ -320,10 +331,13 @@ async function handler(req, res) {
         if (req.method === "POST" && url.pathname === "/api/bot/stop") { stopBot(); return json(res, 200, { ok: true, running }); }
         if (req.method === "POST" && url.pathname === "/api/bot/tick") { await tickOnce(); return json(res, 200, aggregate()); }
         if (req.method === "POST" && url.pathname === "/api/risk/reset-halt") {
+            const snapshot = buildPortfolioSnapshot(runners);
+            if (!snapshot.valid) return json(res, 409, { error: "Wait for valid market prices before resetting portfolio risk" });
+            portfolioRisk.reset({ equity: snapshot.equity, timestamp: Date.now() }); persistPortfolioRisk();
             for (const r of runners) { const price = currentPrice(r); r.engine.guard.resetHalt(r.engine.equity(price)); r.persist(); }
             return json(res, 200, { ok: true });
         }
-        if (req.method === "POST" && url.pathname === "/api/backtest") {
+        if (req.method === "POST" && ["/api/backtest", "/api/train"].includes(url.pathname)) {
             let body = "";
             for await (const chunk of req) {
                 body += chunk;
@@ -335,12 +349,20 @@ async function handler(req, res) {
                 catch { return json(res, 400, { error: "Invalid JSON body" }); }
             }
             if (backtestBusy) return json(res, 429, { error: "A backtest is already running" });
+            if (url.pathname === "/api/train") {
+                backtestBusy = true;
+                const result = await trainSingleCoin({ symbol: input.symbol, direction: input.direction, interval: input.interval,
+                    candles: input.candles, feeRate: process.env.FEE_RATE, slippage: process.env.SLIPPAGE, fundingRatePer8h: process.env.FUNDING_RATE_8H })
+                    .finally(() => { backtestBusy = false; });
+                return json(res, 200, result);
+            }
             backtestBusy = true;
             const result = await runFuturesBacktest({
                 symbol: input.symbol || "BTCUSDT",
                 interval: input.interval || "4h",
                 candles: Number(input.candles ?? 5000),
                 strategy: input.strategy || strategy.name,
+                direction: input.direction,
                 allowShort: input.allowShort === true,
                 startingBalance: Number(input.startingBalance ?? START_BALANCE),
                 leverage: Number(input.leverage ?? LEVERAGE),

@@ -14,6 +14,7 @@ const DEFAULTS = {
   maintenanceMarginRate: 0.005,
   fundingRatePer8h: 0.0001, // configurable estimate; real funding rates vary by symbol/time
   trailing: true,
+  direction: null, // null preserves the legacy engine interface
   allowShort: false, // short entries require explicit opt-in and a SHORT signal
   stepSize: null,
   minQty: 0,
@@ -32,6 +33,7 @@ class FuturesEngine {
         Math.min(125, Number(cfg.leverage ?? DEFAULTS.leverage)),
       ),
     };
+    if (this.cfg.direction != null && !["LONG", "SHORT", "BOTH"].includes(this.cfg.direction)) throw new Error("Invalid engine direction");
     this.guard = new RiskGuard(guard);
     this.onEvent = onEvent || (() => {});
     this.cash = this.cfg.startingBalance; // wallet balance / free collateral before reserved margin
@@ -97,15 +99,15 @@ class FuturesEngine {
       this._emit("GUARD", msg);
 
     if (analysis && !this.pending && !liquidated) {
-      if (this.position?.side === "LONG" && analysis.signal === "SELL")
+      if (this.position?.side === "LONG" && (analysis.signal === "SELL" || analysis.closeLong === true))
         this.pending = { type: "CLOSE", reason: "SIGNAL" };
-      else if (this.position?.side === "SHORT" && analysis.signal === "BUY")
+      else if (this.position?.side === "SHORT" && (analysis.signal === "BUY" || analysis.closeShort === true))
         this.pending = { type: "CLOSE", reason: "SIGNAL" };
       else if (
         !this.position &&
         analysis.entryAllowed !== false &&
-        (analysis.signal === "BUY" ||
-          (analysis.signal === "SHORT" && this.cfg.allowShort))
+        ((analysis.signal === "BUY" && this.cfg.direction !== "SHORT") ||
+          (analysis.signal === "SHORT" && this.cfg.allowShort && this.cfg.direction !== "LONG"))
       ) {
         const gate = this.guard.canOpen(
           immediate ? execution.executionTime : candle.closeTime,
@@ -163,6 +165,7 @@ class FuturesEngine {
     referencePrice = candle.open,
     executionTime = candle.openTime,
   ) {
+    if ((side === "LONG" && this.cfg.direction === "SHORT") || (side === "SHORT" && (this.cfg.direction === "LONG" || !this.cfg.allowShort))) return this._emit("SKIP", "Entry blocked by configured direction");
     const c = this.cfg,
       fill = this._marketFill(referencePrice, side === "LONG" ? "BUY" : "SELL");
     const equity = this.equity(fill);
@@ -444,3 +447,4 @@ class FuturesEngine {
   }
 }
 module.exports = { FuturesEngine, FUTURES_DEFAULTS: DEFAULTS };
+
