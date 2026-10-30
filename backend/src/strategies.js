@@ -46,10 +46,12 @@ function rollingMinPrior(values, n) {
  * while the market is in an uptrend (above SMA200); exit on a close below the lowest low of
  * the last `exitN` candles. No profit target: winners run until the channel breaks.
  */
-function makeBreakout(entryN, exitN) {
+function makeBreakout(entryN, exitN, options = {}) {
+  const useSma200 = options.useSma200 !== false;
+  const name = options.name || `Breakout ${entryN}/${exitN}`;
   return {
-    name: `Breakout ${entryN}/${exitN}`,
-    description: `Buy a close above the ${entryN}-candle high in an uptrend (above SMA200); exit below the ${exitN}-candle low. Lets winners run.`,
+    name,
+    description: `Buy a close above the prior ${entryN}-candle high${useSma200 ? " while above SMA200" : ""}; exit below the prior ${exitN}-candle low. Lets winners run.`,
     engine: { rewardRiskRatio: 10, trailing: false },
     prepare: (candles) => ({
       hh: rollingMaxPrior(
@@ -67,17 +69,17 @@ function makeBreakout(entryN, exitN) {
         c = candles[i].close;
       if (
         atr == null ||
-        sma200 == null ||
+        (useSma200 && sma200 == null) ||
         ctx.hh[i] == null ||
         ctx.ll[i] == null
       )
         return result("HOLD", atr, c);
-      if (c > ctx.hh[i] && c > sma200) return result("BUY", atr, c);
+      if (c > ctx.hh[i] && (!useSma200 || c > sma200)) return result("BUY", atr, c);
       if (c < ctx.ll[i]) return result("SELL", atr, c);
       return result("HOLD", atr, c);
     },
     describe: (ctx, candles, series, i) =>
-      `close ${candles[i].close.toFixed(4)} | buy above ${ctx.hh[i]?.toFixed(4)} (and above SMA200 ${series.sma200[i]?.toFixed(4)}) | exit below ${ctx.ll[i]?.toFixed(4)}`,
+      `close ${candles[i].close.toFixed(4)} | buy above ${ctx.hh[i]?.toFixed(4)}${useSma200 ? ` and above SMA200 ${series.sma200[i]?.toFixed(4)}` : ""} | exit below ${ctx.ll[i]?.toFixed(4)}`,
   };
 }
 
@@ -91,6 +93,7 @@ const STRATEGIES = [
     analyze: (ctx, candles, series, i) => analysisAt(candles, series, i),
   },
   makeBreakout(50, 20),
+  makeBreakout(40, 20, { useSma200: false, name: "Pure Breakout 40/20" }),
   {
     name: "Dip buy (RSI)",
     description:
@@ -156,6 +159,8 @@ const STRATEGIES = [
 ];
 
 // Neighbouring settings, used to check the edge isn't a coincidence of exactly 50/20.
+ // The existing 40/20 variant keeps the SMA200 filter; "Pure Breakout 40/20" removes it
+ // so both hypotheses can be compared on the same candles and execution assumptions.
 const BREAKOUT_VARIANTS = [
   [30, 15],
   [40, 20],
