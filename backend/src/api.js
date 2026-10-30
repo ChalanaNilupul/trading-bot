@@ -287,57 +287,89 @@ function aggregate() {
   };
 }
 
+let tickPromise = null;
+
 async function tickOnce() {
-  await refreshTickers();
-  for (const runner of runners)
-    runner.lastPrice = lastPrices.get(runner.symbol) ?? runner.lastPrice;
-  let changed = false;
-  for (const runner of runners) {
-    try {
-      const hadNewCandle = await runner.tick();
-      if (hadNewCandle) changed = true;
-      runner.errors = 0;
-      lastSuccessfulBinanceAt = Date.now();
-      lastBinanceError = null;
-      recordEvent(
-        "info",
-        "BINANCE",
-        `${runner.symbol}: candle data fetched; ${hadNewCandle ? "new closed candle processed" : "no new closed candle"}`,
-        {
-          symbol: runner.symbol,
-          source: "paper-engine",
-          candleTime: runner.lastProcessed,
-        },
-      );
-      if (hadNewCandle)
+  if (tickPromise) return tickPromise;
+
+  tickPromise = Promise.resolve().then(async () => {
+    await refreshTickers();
+
+    for (const runner of runners) {
+      runner.lastPrice = lastPrices.get(runner.symbol) ?? runner.lastPrice;
+    }
+
+    let changed = false;
+
+    for (const runner of runners) {
+      try {
+        const hadNewCandle = await runner.tick();
+
+        if (hadNewCandle) changed = true;
+
+        runner.errors = 0;
+        lastSuccessfulBinanceAt = Date.now();
+        lastBinanceError = null;
+
         recordEvent(
           "info",
-          "STRATEGY",
-          `${runner.symbol}: ${runner.lastNote}`,
+          "BINANCE",
+          `${runner.symbol}: candle data fetched; ${hadNewCandle ? "new closed candle processed" : "no new closed candle"}`,
           {
             symbol: runner.symbol,
             source: "paper-engine",
             candleTime: runner.lastProcessed,
           },
         );
-    } catch (error) {
-      runner.errors += 1;
-      lastBinanceError = { at: Date.now(), message: error.message };
-      recordEvent(
-        "error",
-        "FETCH_ERROR",
-        `${runner.symbol}: ${error.message} (consecutive errors: ${runner.errors})`,
-        { symbol: runner.symbol, source: "paper-engine" },
-      );
-      console.error(`${runner.symbol}: ${error.message}`);
+
+        if (hadNewCandle) {
+          recordEvent(
+            "info",
+            "STRATEGY",
+            `${runner.symbol}: ${runner.lastNote}`,
+            {
+              symbol: runner.symbol,
+              source: "paper-engine",
+              candleTime: runner.lastProcessed,
+            },
+          );
+        }
+      } catch (error) {
+        runner.errors += 1;
+        lastBinanceError = {
+          at: Date.now(),
+          message: error.message,
+        };
+
+        recordEvent(
+          "error",
+          "FETCH_ERROR",
+          `${runner.symbol}: ${error.message} (consecutive errors: ${runner.errors})`,
+          { symbol: runner.symbol, source: "paper-engine" },
+        );
+
+        console.error(`${runner.symbol}: ${error.message}`);
+      }
     }
+
+    const snapshot = buildPortfolioSnapshot(runners);
+
+    if (snapshot.valid) {
+      portfolioRisk.update({
+        equity: snapshot.equity,
+        timestamp: Date.now(),
+      });
+      persistPortfolioRisk();
+    }
+
+    return changed;
+  });
+
+  try {
+    return await tickPromise;
+  } finally {
+    tickPromise = null;
   }
-  const snapshot = buildPortfolioSnapshot(runners);
-  if (snapshot.valid) {
-    portfolioRisk.update({ equity: snapshot.equity, timestamp: Date.now() });
-    persistPortfolioRisk();
-  }
-  return changed;
 }
 
 async function botLoop() {
