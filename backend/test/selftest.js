@@ -464,6 +464,33 @@ test("SELL while flat does not open a short", () => {
   assert.equal(e.trades.length, 0);
 });
 
+test("futures engine triggers stop before liquidation when stop is reached first", () => {
+  const e = new FuturesEngine({
+    startingBalance: 1000,
+    leverage: 5,
+    feeRate: 0.0005,
+    slippage: 0,
+    maxPositionPercent: 0.25,
+  });
+
+  e.onCandle(candle(T, 100, 100.5, 99.5, 100), {
+    ...neutral,
+    signal: "BUY",
+  });
+  e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
+
+  const stop = e.position.stopPrice;
+  const liq = e.position.liquidationPrice;
+
+  assert.ok(stop > liq, "long stop should be above liquidation price");
+
+  e.onCandle(candle(T + 120_000, 100, 101, liq - 1, liq), neutral);
+
+  assert.equal(e.position, null);
+  assert.equal(e.trades.at(-1).reason, "STOP LOSS");
+  assert.equal(e.trades.at(-1).exitPrice, stop);
+});
+
 test("futures engine simulates isolated liquidation before a stop on a gap candle", () => {
   const e = new FuturesEngine({
     startingBalance: 1000,
@@ -500,6 +527,33 @@ test("futures engine charges estimated funding when an 8-hour boundary is crosse
   e.onCandle(candle(nearFunding + 60_000, 100, 101, 99, 100), neutral);
   e.onCandle(candle(nearFunding + 2 * 60_000, 100, 101, 99, 100), neutral);
   assert.ok(e.position.fundingPaid > 0);
+});
+test("futures engine calculates funding using the boundary price", () => {
+  const nearFunding = Date.UTC(2025, 0, 1, 7, 58);
+
+  const e = new FuturesEngine({
+    startingBalance: 1000,
+    leverage: 5,
+    feeRate: 0,
+    slippage: 0,
+    maxPositionPercent: 0.25,
+    fundingRatePer8h: 0.0001,
+  });
+
+  e.onCandle(candle(nearFunding, 100, 100.5, 99.5, 100), {
+    ...neutral,
+    signal: "BUY",
+  });
+
+  e.onCandle(candle(nearFunding + 60_000, 100, 101.5, 99.5, 101), neutral);
+
+  assert.ok(e.position, "position should remain open");
+
+  const quantity = e.position.quantity;
+  const boundaryPrice = 101;
+  const expectedFunding = quantity * boundaryPrice * 0.0001;
+
+  near(e.position.fundingPaid, expectedFunding);
 });
 test("futures state serializes and restores isolated margin positions", () => {
   const e = new FuturesEngine({ startingBalance: 1000, leverage: 5 });
@@ -550,6 +604,37 @@ test("liquidation candle still updates equity curve and risk guard", () => {
     null,
     "no new entry may be queued on the liquidation candle",
   );
+});
+test("futures engine uses 4h candle open at funding boundary", () => {
+  const beforeFunding = Date.UTC(2025, 0, 1, 4, 0);
+
+  const e = new FuturesEngine({
+    startingBalance: 1000,
+    leverage: 5,
+    feeRate: 0,
+    slippage: 0,
+    maxPositionPercent: 0.25,
+    fundingRatePer8h: 0.0001,
+  });
+
+  e.onCandle(candle(beforeFunding, 100, 100.5, 99.5, 100), {
+    ...neutral,
+    signal: "BUY",
+  });
+
+  e.onCandle(candle(beforeFunding + 60_000, 100, 101, 99, 100), neutral);
+
+  const quantity = e.position.quantity;
+  const fundingOpenPrice = 100;
+
+  e.onCandle(
+    candle(Date.UTC(2025, 0, 1, 8, 0), fundingOpenPrice, 100.1, 99.9, 100.05),
+    neutral,
+  );
+
+  const expectedFunding = quantity * fundingOpenPrice * 0.0001;
+
+  near(e.position.fundingPaid, expectedFunding);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}\n`);

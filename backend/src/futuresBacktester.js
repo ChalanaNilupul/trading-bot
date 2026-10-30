@@ -42,6 +42,7 @@ function priceReturnPct(candles, start, end) {
 }
 
 function runSegment({ candles, strategy, config, filters, start, end }) {
+  const riskEvents = [];
   const engine = new FuturesEngine({
     ...config,
     ...strategy.engine,
@@ -57,10 +58,19 @@ function runSegment({ candles, strategy, config, filters, start, end }) {
       maxDailyLossPct: config.maxDailyLossPct,
       maxDrawdownPct: config.maxDrawdownPct,
       maxConsecutiveLosses: config.maxConsecutiveLosses,
+      cooldownMs: config.cooldownMs ?? 4 * 60 * 60 * 1000,
       maxTradesPerDay: config.maxTradesPerDay,
       haltCooldownMs: config.haltResumeDays * 86400e3,
     },
-    onEvent: () => {},
+    onEvent: (event) => {
+      if (event.type === "GUARD" || event.type === "SKIP") {
+        riskEvents.push({
+          type: event.type,
+          message: event.message,
+          time: event.time ?? null,
+        });
+      }
+    },
   });
   const slice = candles.slice(0, end);
   const series = buildSeries(slice);
@@ -91,7 +101,70 @@ function runSegment({ candles, strategy, config, filters, start, end }) {
     (sum, trade) => sum + (trade.funding || 0),
     0,
   );
-  return { engine, metrics, buyHold: priceReturnPct(candles, start, end) };
+  const cooldownMs = config.cooldownMs ?? 4 * 60 * 60 * 1000;
+
+  const cooldownEvents = riskEvents.filter(
+    (e) =>
+      e.type === "GUARD" &&
+      e.message?.includes("Consecutive loss cooldown activated"),
+  );
+
+  const cooldownSkips = riskEvents.filter(
+    (e) =>
+      e.type === "SKIP" &&
+      e.message?.includes("cooldown after consecutive losses"),
+  );
+
+  const cooldownIntervals = cooldownEvents
+    .filter((e) => Number.isFinite(e.time))
+    .map((e) => [e.time, e.time + cooldownMs])
+    .sort((a, b) => a[0] - b[0]);
+
+  let cooldownTotalMs = 0;
+  let intervalStart = null;
+  let intervalEnd = null;
+
+  for (const [start, end] of cooldownIntervals) {
+    if (intervalStart === null) {
+      intervalStart = start;
+      intervalEnd = end;
+    } else if (start <= intervalEnd) {
+      intervalEnd = Math.max(intervalEnd, end);
+    } else {
+      cooldownTotalMs += intervalEnd - intervalStart;
+      intervalStart = start;
+      intervalEnd = end;
+    }
+  }
+
+  if (intervalStart !== null) {
+    cooldownTotalMs += intervalEnd - intervalStart;
+  }
+
+  const riskSummary = {
+    consecutiveLossCooldowns: cooldownEvents.length,
+    cooldownHours: Number((cooldownTotalMs / 3600000).toFixed(2)),
+    blockedEntries: cooldownSkips.length,
+    cooldownSignalRejections: cooldownSkips.filter((e) =>
+      e.message?.includes("signal ignored"),
+    ).length,
+    cooldownFillBlocks: cooldownSkips.filter((e) =>
+      e.message?.includes("entry blocked at fill"),
+    ).length,
+    dailyLossWarnings: riskEvents.filter((e) =>
+      e.message?.includes("Daily loss limit"),
+    ).length,
+    drawdownWarnings: riskEvents.filter((e) =>
+      e.message?.includes("KILL SWITCH"),
+    ).length,
+  };
+
+  return {
+    engine,
+    metrics,
+    riskSummary,
+    buyHold: priceReturnPct(candles, start, end),
+  };
 }
 
 async function runFuturesBacktest(options = {}) {
@@ -122,10 +195,15 @@ async function runFuturesBacktest(options = {}) {
     maxDailyLossPct: Number(options.maxDailyLossPct ?? 0.03),
     maxDrawdownPct: Number(options.maxDrawdownPct ?? 0.1),
     maxConsecutiveLosses: Number(options.maxConsecutiveLosses ?? 3),
+    cooldownMs: Number(options.cooldownMs ?? 14400000),
     maxTradesPerDay: Number(options.maxTradesPerDay ?? 6),
     haltResumeDays: Number(options.haltResumeDays ?? 7),
-    direction: normalizeDirection(options.direction ?? (options.allowShort === true ? "BOTH" : "LONG")),
-    allowShort: options.direction ? normalizeDirection(options.direction) !== "LONG" : options.allowShort === true,
+    direction: normalizeDirection(
+      options.direction ?? (options.allowShort === true ? "BOTH" : "LONG"),
+    ),
+    allowShort: options.direction
+      ? normalizeDirection(options.direction) !== "LONG"
+      : options.allowShort === true,
     trailing: options.trailing,
     split: Math.max(0.5, Math.min(0.9, Number(options.split ?? 0.7))),
   };
@@ -163,6 +241,7 @@ async function runFuturesBacktest(options = {}) {
         config.symbol,
         config.interval,
         config.candles,
+        options.endTime ?? Date.now(),
       );
   if (candles.length < WARMUP + 100)
     throw new Error(
@@ -237,27 +316,32 @@ async function runFuturesBacktest(options = {}) {
       metrics: full.metrics,
       trades: full.engine.trades,
       equityCurve: full.engine.equityCurve,
+      riskSummary: full.riskSummary,
     },
     inSample: {
       buyHold: inSample.buyHold,
       metrics: inSample.metrics,
       trades: inSample.engine.trades,
       equityCurve: inSample.engine.equityCurve,
+      riskSummary: inSample.riskSummary,
     },
     outSample: {
       buyHold: outSample.buyHold,
       metrics: outSample.metrics,
       trades: outSample.engine.trades,
       equityCurve: outSample.engine.equityCurve,
+      riskSummary: outSample.riskSummary,
     },
     risk: {
       fullMaxDrawdownPct: full.engine.maxDrawdown * 100,
       liquidationCount: full.engine.trades.filter(
         (t) => t.reason === "LIQUIDATION",
       ).length,
+      full: full.riskSummary,
+      inSample: inSample.riskSummary,
+      outSample: outSample.riskSummary,
     },
   };
 }
 
 module.exports = { runFuturesBacktest, priceReturnPct };
-

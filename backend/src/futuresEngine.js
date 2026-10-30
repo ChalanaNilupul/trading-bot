@@ -33,7 +33,11 @@ class FuturesEngine {
         Math.min(125, Number(cfg.leverage ?? DEFAULTS.leverage)),
       ),
     };
-    if (this.cfg.direction != null && !["LONG", "SHORT", "BOTH"].includes(this.cfg.direction)) throw new Error("Invalid engine direction");
+    if (
+      this.cfg.direction != null &&
+      !["LONG", "SHORT", "BOTH"].includes(this.cfg.direction)
+    )
+      throw new Error("Invalid engine direction");
     this.guard = new RiskGuard(guard);
     this.onEvent = onEvent || (() => {});
     this.cash = this.cfg.startingBalance; // wallet balance / free collateral before reserved margin
@@ -89,6 +93,7 @@ class FuturesEngine {
     const price = candle.close;
     const equity = this.equity(price);
     this.lastEquity = equity;
+    this.currentTime = candle.closeTime;
     this.equityCurve.push({ time: candle.closeTime, equity });
     this.peak = Math.max(this.peak, equity);
     this.maxDrawdown = Math.max(
@@ -99,15 +104,23 @@ class FuturesEngine {
       this._emit("GUARD", msg);
 
     if (analysis && !this.pending && !liquidated) {
-      if (this.position?.side === "LONG" && (analysis.signal === "SELL" || analysis.closeLong === true))
+      if (
+        this.position?.side === "LONG" &&
+        (analysis.signal === "SELL" || analysis.closeLong === true)
+      )
         this.pending = { type: "CLOSE", reason: "SIGNAL" };
-      else if (this.position?.side === "SHORT" && (analysis.signal === "BUY" || analysis.closeShort === true))
+      else if (
+        this.position?.side === "SHORT" &&
+        (analysis.signal === "BUY" || analysis.closeShort === true)
+      )
         this.pending = { type: "CLOSE", reason: "SIGNAL" };
       else if (
         !this.position &&
         analysis.entryAllowed !== false &&
         ((analysis.signal === "BUY" && this.cfg.direction !== "SHORT") ||
-          (analysis.signal === "SHORT" && this.cfg.allowShort && this.cfg.direction !== "LONG"))
+          (analysis.signal === "SHORT" &&
+            this.cfg.allowShort &&
+            this.cfg.direction !== "LONG"))
       ) {
         const gate = this.guard.canOpen(
           immediate ? execution.executionTime : candle.closeTime,
@@ -165,7 +178,12 @@ class FuturesEngine {
     referencePrice = candle.open,
     executionTime = candle.openTime,
   ) {
-    if ((side === "LONG" && this.cfg.direction === "SHORT") || (side === "SHORT" && (this.cfg.direction === "LONG" || !this.cfg.allowShort))) return this._emit("SKIP", "Entry blocked by configured direction");
+    if (
+      (side === "LONG" && this.cfg.direction === "SHORT") ||
+      (side === "SHORT" &&
+        (this.cfg.direction === "LONG" || !this.cfg.allowShort))
+    )
+      return this._emit("SKIP", "Entry blocked by configured direction");
     const c = this.cfg,
       fill = this._marketFill(referencePrice, side === "LONG" ? "BUY" : "SELL");
     const equity = this.equity(fill);
@@ -217,9 +235,11 @@ class FuturesEngine {
     if (stopPrice <= 0)
       return this._emit("SKIP", "Entry rejected: invalid stop price");
     const targetPrice =
-      side === "LONG"
-        ? fill + stopDistance * c.rewardRiskRatio
-        : fill - stopDistance * c.rewardRiskRatio;
+      c.rewardRiskRatio == null
+        ? null
+        : side === "LONG"
+          ? fill + stopDistance * c.rewardRiskRatio
+          : fill - stopDistance * c.rewardRiskRatio;
     this.cash -= margin + entryFee;
     this.position = {
       side,
@@ -242,7 +262,7 @@ class FuturesEngine {
     this.guard.recordEntry();
     this._emit(
       "ENTRY",
-      `${side} ${quantity} @ ${fill.toFixed(4)} | ${c.leverage}x isolated | margin ${margin.toFixed(2)} USDT | SL ${stopPrice.toFixed(4)} | TP ${targetPrice.toFixed(4)}`,
+      `${side} ${quantity} @ ${fill.toFixed(4)} | ${c.leverage}x isolated | margin ${margin.toFixed(2)} USDT | SL ${stopPrice.toFixed(4)} | TP ${targetPrice == null ? "DISABLED" : targetPrice.toFixed(4)}`,
       { position: { ...this.position } },
     );
   }
@@ -263,8 +283,15 @@ class FuturesEngine {
     const crossed =
       Math.floor(candle.closeTime / interval) - Math.floor(previous / interval);
     if (crossed > 0) {
+      const fundingPrice =
+        candle.openTime > previous && candle.openTime % interval === 0
+          ? candle.open
+          : candle.close;
+
+      const fundingNotional = p.quantity * fundingPrice;
+
       const fee =
-        p.notional *
+        fundingNotional *
         this.cfg.fundingRatePer8h *
         crossed *
         (p.side === "LONG" ? 1 : -1);
@@ -283,18 +310,42 @@ class FuturesEngine {
   _checkLiquidation(candle) {
     const p = this.position;
     const liq = p.liquidationPrice;
-    const touched = p.side === "LONG" ? candle.low <= liq : candle.high >= liq;
-    if (!touched) return false;
+
+    const liquidationTouched =
+      p.side === "LONG" ? candle.low <= liq : candle.high >= liq;
+
+    if (!liquidationTouched) return false;
+
+    const stopTouched =
+      p.side === "LONG"
+        ? candle.low <= p.stopPrice
+        : candle.high >= p.stopPrice;
+
+    const openedBeyondLiquidation =
+      p.side === "LONG" ? candle.open <= liq : candle.open >= liq;
+
+    // If both levels are touched, check whether the stop is
+    // encountered before liquidation when moving adversely.
+    const stopReachedFirst =
+      p.side === "LONG" ? p.stopPrice > liq : p.stopPrice < liq;
+
+    if (stopTouched && !openedBeyondLiquidation && stopReachedFirst) {
+      this._checkExits(candle);
+      return false;
+    }
+
     const raw =
       p.side === "LONG"
         ? Math.min(candle.open, liq)
         : Math.max(candle.open, liq);
+
     this._close(
       this._marketFill(raw, p.side === "LONG" ? "SELL" : "BUY"),
       candle.closeTime,
       "LIQUIDATION",
       true,
     );
+
     return true;
   }
 
@@ -317,9 +368,10 @@ class FuturesEngine {
       return;
     }
     const targetHit =
-      p.side === "LONG"
+      p.targetPrice != null &&
+      (p.side === "LONG"
         ? candle.high >= p.targetPrice
-        : candle.low <= p.targetPrice;
+        : candle.low <= p.targetPrice);
     if (targetHit) {
       const raw =
         p.side === "LONG"
@@ -408,7 +460,10 @@ class FuturesEngine {
     };
     this.trades.push(trade);
     this.position = null;
-    this.guard.recordExit(netPnL, time);
+    const cooldownEvent = this.guard.recordExit(netPnL, time);
+    if (cooldownEvent) {
+      this._emit(cooldownEvent.type, cooldownEvent.message);
+    }
     this._emit(
       "EXIT",
       `${reason}: ${trade.side} exit ${exitPrice.toFixed(4)} | net ${netPnL >= 0 ? "+" : ""}${netPnL.toFixed(2)} USDT (${trade.rMultiple.toFixed(2)}R)`,
@@ -422,7 +477,12 @@ class FuturesEngine {
     this._close(this._marketFill(price, action), time, reason);
   }
   _emit(type, message, data = {}) {
-    this.onEvent({ type, message, ...data });
+    this.onEvent({
+      type,
+      message,
+      time: this.currentTime ?? null,
+      ...data,
+    });
   }
   toJSON() {
     return {
@@ -447,4 +507,3 @@ class FuturesEngine {
   }
 }
 module.exports = { FuturesEngine, FUTURES_DEFAULTS: DEFAULTS };
-

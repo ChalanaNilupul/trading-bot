@@ -52,7 +52,7 @@ function makeBreakout(entryN, exitN, options = {}) {
   return {
     name,
     description: `Buy a close above the prior ${entryN}-candle high${useSma200 ? " while above SMA200" : ""}; exit below the prior ${exitN}-candle low. Lets winners run.`,
-    engine: { rewardRiskRatio: 10, trailing: false },
+    engine: { rewardRiskRatio: null, trailing: false },
     prepare: (candles) => ({
       hh: rollingMaxPrior(
         candles.map((c) => c.high),
@@ -74,7 +74,8 @@ function makeBreakout(entryN, exitN, options = {}) {
         ctx.ll[i] == null
       )
         return result("HOLD", atr, c);
-      if (c > ctx.hh[i] && (!useSma200 || c > sma200)) return result("BUY", atr, c);
+      if (c > ctx.hh[i] && (!useSma200 || c > sma200))
+        return result("BUY", atr, c);
       if (c < ctx.ll[i]) return result("SELL", atr, c);
       return result("HOLD", atr, c);
     },
@@ -143,7 +144,7 @@ const STRATEGIES = [
     name: "Trend filter only",
     description:
       "Simplest possible: be long while price and SMA50 are above SMA200, otherwise flat. The benchmark that fancier ideas must beat.",
-    engine: { rewardRiskRatio: 10, trailing: false },
+    engine: { rewardRiskRatio: null, trailing: false },
     prepare: () => null,
     analyze: (ctx, candles, series, i) => {
       const atr = series.atr14[i],
@@ -159,8 +160,8 @@ const STRATEGIES = [
 ];
 
 // Neighbouring settings, used to check the edge isn't a coincidence of exactly 50/20.
- // The existing 40/20 variant keeps the SMA200 filter; "Pure Breakout 40/20" removes it
- // so both hypotheses can be compared on the same candles and execution assumptions.
+// The existing 40/20 variant keeps the SMA200 filter; "Pure Breakout 40/20" removes it
+// so both hypotheses can be compared on the same candles and execution assumptions.
 const BREAKOUT_VARIANTS = [
   [30, 15],
   [40, 20],

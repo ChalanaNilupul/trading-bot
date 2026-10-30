@@ -111,7 +111,7 @@ test("API specializes one symbol/direction and the portfolio gate permits an eli
   assert.equal(trained.status, 200, JSON.stringify(report));
   assert.equal(report.direction, "SHORT");
   assert.equal(report.aiIncluded, false);
-  assert.equal(report.candidates.length, 9);
+  assert.equal(report.candidates.length, 10);
   const unchanged = await (
     await fetch(base + "/api/status", { headers })
   ).json();
