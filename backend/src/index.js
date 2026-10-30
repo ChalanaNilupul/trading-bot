@@ -30,7 +30,12 @@ const { PortfolioRiskManager } = require("./portfolioRiskManager");
 
 const DEFAULT_SYMBOLS =
   "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,AVAXUSDT,LINKUSDT";
-const SYMBOLS = (process.env.BOT_SYMBOL || process.env.SYMBOLS || process.env.SYMBOL || DEFAULT_SYMBOLS)
+const SYMBOLS = (
+  process.env.BOT_SYMBOL ||
+  process.env.SYMBOLS ||
+  process.env.SYMBOL ||
+  DEFAULT_SYMBOLS
+)
   .split(",")
   .map((s) => s.trim().toUpperCase())
   .filter(Boolean);
@@ -42,8 +47,15 @@ const RUNNER_BALANCE = START_BALANCE / SYMBOLS.length;
 const ONE_SHOT = process.env.ONE_SHOT === "1";
 
 const DIRECTION = normalizeDirection(process.env.DIRECTION || "LONG");
-if (process.env.BOT_SYMBOL && (SYMBOLS.length !== 1 || !/^[A-Z0-9]{3,30}$/.test(SYMBOLS[0]))) throw new Error("BOT_SYMBOL must contain exactly one valid symbol");
-const strategy = directedStrategy(process.env.STRATEGY || DEFAULT_STRATEGY, DIRECTION);
+if (
+  process.env.BOT_SYMBOL &&
+  (SYMBOLS.length !== 1 || !/^[A-Z0-9]{3,30}$/.test(SYMBOLS[0]))
+)
+  throw new Error("BOT_SYMBOL must contain exactly one valid symbol");
+const strategy = directedStrategy(
+  process.env.STRATEGY || DEFAULT_STRATEGY,
+  DIRECTION,
+);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
@@ -107,8 +119,13 @@ class Runner {
     this.aiFilter = options.aiFilter || new AIEntryFilter();
     this.strategy = options.strategy || strategy;
     this.direction = options.direction || DIRECTION;
-    const runnerSlug = this.strategy.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const suffix = process.env.BOT_SYMBOL || process.env.DIRECTION || options.direction ? `_${this.direction.toLowerCase()}` : "";
+    const runnerSlug = this.strategy.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-");
+    const suffix =
+      process.env.BOT_SYMBOL || process.env.DIRECTION || options.direction
+        ? `_${this.direction.toLowerCase()}`
+        : "";
     this.lastProcessed = null;
     this.resetToken = null;
     this.errors = 0;
@@ -156,7 +173,12 @@ class Runner {
 
   async init(loadFilters = true) {
     const saved = store.load(this.stateFile);
-    if (saved?.engine?.position && this.direction !== "BOTH" && saved.engine.position.side !== this.direction) throw new Error("Saved position direction differs from this bot profile");
+    if (
+      saved?.engine?.position &&
+      this.direction !== "BOTH" &&
+      saved.engine.position.side !== this.direction
+    )
+      throw new Error("Saved position direction differs from this bot profile");
     if (saved) {
       this.engine.restore(saved.engine);
       this.lastProcessed = saved.lastProcessed ?? null;
@@ -212,7 +234,10 @@ class Runner {
         series,
         candles.length - 1,
       );
-      if ((analysis.signal === "BUY" && this.direction !== "SHORT") || (analysis.signal === "SHORT" && this.direction !== "LONG")) {
+      if (
+        (analysis.signal === "BUY" && this.direction !== "SHORT") ||
+        (analysis.signal === "SHORT" && this.direction !== "LONG")
+      ) {
         decision = await this.aiFilter.evaluate({
           symbol: this.symbol,
           interval: INTERVAL,
@@ -246,8 +271,10 @@ class Runner {
       throw new Error(`Invalid observed execution price for ${this.symbol}`);
     }
     // First ever run: start from the newest closed candle instead of replaying history.
-    if (this.lastProcessed === null)
+    if (this.lastProcessed === null) {
       this.lastProcessed = candles[candles.length - 2].closeTime;
+      this.persist();
+    }
 
     const series = buildSeries(candles);
     const ctx = this.strategy.prepare(candles, series);
@@ -279,7 +306,8 @@ class Runner {
 
       const isEntryCandidate =
         analysis &&
-        ((analysis.signal === "BUY" && this.direction !== "SHORT") || (analysis.signal === "SHORT" && this.direction !== "LONG")) &&
+        ((analysis.signal === "BUY" && this.direction !== "SHORT") ||
+          (analysis.signal === "SHORT" && this.direction !== "LONG")) &&
         !this.engine.position;
 
       if (isEntryCandidate) {
@@ -486,6 +514,6 @@ module.exports = {
   portfolioRisk,
   buildPortfolioSnapshot,
   persistPortfolioRisk,
-  restorePortfolioRisk: () => portfolioRisk.restore(store.load(PORTFOLIO_STATE_FILE)),
+  restorePortfolioRisk: () =>
+    portfolioRisk.restore(store.load(PORTFOLIO_STATE_FILE)),
 };
-
