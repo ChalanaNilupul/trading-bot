@@ -129,8 +129,13 @@ class Runner {
     this.lastProcessed = null;
     this.resetToken = null;
     this.errors = 0;
-    this.stateFile = `data/state_futures_${symbol}_${INTERVAL}_${runnerSlug}${suffix}.json`;
-    this.tradeLog = `data/trades_futures_${symbol}_${INTERVAL}_${runnerSlug}${suffix}.jsonl`;
+    this.stateFile =
+      options.stateFile ||
+      `data/state_futures_${symbol}_${INTERVAL}_${runnerSlug}${suffix}.json`;
+
+    this.tradeLog =
+      options.tradeLog ||
+      `data/trades_futures_${symbol}_${INTERVAL}_${runnerSlug}${suffix}.jsonl`;
     this.engine =
       options.engine ||
       new FuturesEngine({
