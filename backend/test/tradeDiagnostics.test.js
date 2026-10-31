@@ -69,12 +69,12 @@ test('offline comparison writes dashboard diagnostics with provenance and reject
   const candles=Array.from({length:6400},(_,i)=>{const close=100+i*.01;return {openTime:start+i*900000,closeTime:start+(i+1)*900000-1,open:close,close,high:close+.005,low:close-.005,volume:1};});
   const cache={candles,filters:{},candleSHA256:crypto.createHash('sha256').update(JSON.stringify(candles)).digest('hex')};
   fs.writeFileSync(path.join(dir,'dataset.json'),JSON.stringify(cache));
-  await main({directory:dir,offline:true});
+  await main({directory:dir,offline:true,quiet:true});
   const d=JSON.parse(fs.readFileSync(path.join(dir,'diagnostics.json')));
   const r=JSON.parse(fs.readFileSync(path.join(dir,'report.json')));
   assert.equal(d.scenarios.length,4);assert.equal(d.candleSHA256,r.candleSHA256);assert.equal(d.sourceSHA256,r.sourceSHA256);
   for(let i=0;i<4;i++) for(const key of ['full','inSample','outSample']) assert.deepEqual(d.scenarios[i].segments[key],r.results[i].result[key].diagnostics);
   cache.candles[0].close+=1;fs.writeFileSync(path.join(dir,'dataset.json'),JSON.stringify(cache));
-  await assert.rejects(main({directory:dir,offline:true}),/checksum/);
+  await assert.rejects(main({directory:dir,offline:true,quiet:true}),/checksum/);
  } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });

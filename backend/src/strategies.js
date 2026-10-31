@@ -10,6 +10,7 @@
  */
 const { analysisAt } = require("./strategy");
 const { multiTimeframeStrategy } = require("./multiTimeframe");
+const { breakoutRetestStrategy } = require("./breakoutRetest");
 
 const result = (signal, atr, price) => ({
   signal,
@@ -87,6 +88,7 @@ function makeBreakout(entryN, exitN, options = {}) {
 
 const STRATEGIES = [
   multiTimeframeStrategy,
+  breakoutRetestStrategy,
   {
     name: "Current (score)",
     description:
