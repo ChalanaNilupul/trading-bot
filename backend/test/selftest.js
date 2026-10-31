@@ -555,16 +555,55 @@ test("futures engine calculates funding using the boundary price", () => {
 
   near(e.position.fundingPaid, expectedFunding);
 });
-test("futures state serializes and restores isolated margin positions", () => {
+
+test("futures state fully survives restart with an open isolated margin position", () => {
   const e = new FuturesEngine({ startingBalance: 1000, leverage: 5 });
-  e.onCandle(candle(T, 100, 100.5, 99.5, 100), { ...neutral, signal: "BUY" });
+
+  e.onCandle(candle(T, 100, 100.5, 99.5, 100), {
+    ...neutral,
+    signal: "BUY",
+  });
   e.onCandle(candle(T + 60_000, 100, 101, 99, 100), neutral);
-  const copy = new FuturesEngine({ startingBalance: 1000, leverage: 5 });
-  copy.restore(JSON.parse(JSON.stringify(e.toJSON())));
-  assert.equal(copy.position.side, "LONG");
-  near(copy.position.margin, e.position.margin);
-  near(copy.cash, e.cash);
+
+  assert.ok(e.position, "test must create an open position");
+
+  // Simulate saving state to disk and constructing a fresh engine after restart.
+  const savedState = JSON.parse(JSON.stringify(e.toJSON()));
+  const restored = new FuturesEngine({
+    startingBalance: 1000,
+    leverage: 5,
+  });
+
+  restored.restore(savedState);
+
+  assert.ok(restored.position, "open position must be restored");
+  assert.equal(restored.position.side, e.position.side);
+  assert.equal(restored.position.side, "LONG");
+
+  for (const field of [
+    "entryPrice",
+    "quantity",
+    "margin",
+    "stopPrice",
+    "targetPrice",
+    "liquidationPrice",
+    "fundingPaid",
+  ]) {
+    assert.equal(
+      restored.position[field],
+      e.position[field],
+      `${field} must survive restart`,
+    );
+  }
+
+  assert.equal(restored.cash, e.cash);
+  assert.equal(restored.trades.length, e.trades.length);
+  assert.equal(restored.leverage, e.leverage);
+
+  // Both engines must produce the same equity after restoration.
+  assert.equal(restored.equity, e.equity);
 });
+
 test("allowShort=false ignores SELL signals while flat (long-only mode)", () => {
   const e = new FuturesEngine({
     startingBalance: 1000,
