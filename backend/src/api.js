@@ -33,6 +33,8 @@ const aiMonitor = new AIMonitor(new AIEntryFilter());
 const PORT = Number(process.env.API_PORT || 4000);
 const HOST = process.env.API_HOST || "127.0.0.1";
 const API_KEY = process.env.API_KEY || "";
+const { createSingleFlight } = require("./singleFlight");
+
 if (API_KEY.length < 16) {
   console.error(
     "API_KEY env var is required (min 16 chars). Generate one with:\n  node -e \"console.log(require('crypto').randomBytes(24).toString('hex'))\"",
@@ -287,90 +289,78 @@ function aggregate() {
   };
 }
 
-let tickPromise = null;
+const tickOnce = createSingleFlight(async () => {
+  await refreshTickers();
 
-async function tickOnce() {
-  if (tickPromise) return tickPromise;
+  for (const runner of runners) {
+    runner.lastPrice = lastPrices.get(runner.symbol) ?? runner.lastPrice;
+  }
 
-  tickPromise = Promise.resolve().then(async () => {
-    await refreshTickers();
+  let changed = false;
 
-    for (const runner of runners) {
-      runner.lastPrice = lastPrices.get(runner.symbol) ?? runner.lastPrice;
-    }
+  for (const runner of runners) {
+    try {
+      const hadNewCandle = await runner.tick();
 
-    let changed = false;
+      if (hadNewCandle) changed = true;
 
-    for (const runner of runners) {
-      try {
-        const hadNewCandle = await runner.tick();
+      runner.errors = 0;
+      lastSuccessfulBinanceAt = Date.now();
+      lastBinanceError = null;
 
-        if (hadNewCandle) changed = true;
+      recordEvent(
+        "info",
+        "BINANCE",
+        `${runner.symbol}: candle data fetched; ${hadNewCandle ? "new closed candle processed" : "no new closed candle"}`,
+        {
+          symbol: runner.symbol,
+          source: "paper-engine",
+          candleTime: runner.lastProcessed,
+        },
+      );
 
-        runner.errors = 0;
-        lastSuccessfulBinanceAt = Date.now();
-        lastBinanceError = null;
-
+      if (hadNewCandle) {
         recordEvent(
           "info",
-          "BINANCE",
-          `${runner.symbol}: candle data fetched; ${hadNewCandle ? "new closed candle processed" : "no new closed candle"}`,
+          "STRATEGY",
+          `${runner.symbol}: ${runner.lastNote}`,
           {
             symbol: runner.symbol,
             source: "paper-engine",
             candleTime: runner.lastProcessed,
           },
         );
-
-        if (hadNewCandle) {
-          recordEvent(
-            "info",
-            "STRATEGY",
-            `${runner.symbol}: ${runner.lastNote}`,
-            {
-              symbol: runner.symbol,
-              source: "paper-engine",
-              candleTime: runner.lastProcessed,
-            },
-          );
-        }
-      } catch (error) {
-        runner.errors += 1;
-        lastBinanceError = {
-          at: Date.now(),
-          message: error.message,
-        };
-
-        recordEvent(
-          "error",
-          "FETCH_ERROR",
-          `${runner.symbol}: ${error.message} (consecutive errors: ${runner.errors})`,
-          { symbol: runner.symbol, source: "paper-engine" },
-        );
-
-        console.error(`${runner.symbol}: ${error.message}`);
       }
+    } catch (error) {
+      runner.errors += 1;
+      lastBinanceError = {
+        at: Date.now(),
+        message: error.message,
+      };
+
+      recordEvent(
+        "error",
+        "FETCH_ERROR",
+        `${runner.symbol}: ${error.message} (consecutive errors: ${runner.errors})`,
+        { symbol: runner.symbol, source: "paper-engine" },
+      );
+
+      console.error(`${runner.symbol}: ${error.message}`);
     }
-
-    const snapshot = buildPortfolioSnapshot(runners);
-
-    if (snapshot.valid) {
-      portfolioRisk.update({
-        equity: snapshot.equity,
-        timestamp: Date.now(),
-      });
-      persistPortfolioRisk();
-    }
-
-    return changed;
-  });
-
-  try {
-    return await tickPromise;
-  } finally {
-    tickPromise = null;
   }
-}
+
+  const snapshot = buildPortfolioSnapshot(runners);
+
+  if (snapshot.valid) {
+    portfolioRisk.update({
+      equity: snapshot.equity,
+      timestamp: Date.now(),
+    });
+    persistPortfolioRisk();
+  }
+
+  return changed;
+});
 
 async function botLoop() {
   if (loopPromise) return loopPromise;
