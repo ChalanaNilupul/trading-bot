@@ -56,6 +56,7 @@ const strategy = directedStrategy(
   process.env.STRATEGY || DEFAULT_STRATEGY,
   DIRECTION,
 );
+if (strategy.requiredInterval && INTERVAL !== strategy.requiredInterval) throw new Error(`${strategy.name} requires INTERVAL=${strategy.requiredInterval}`);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
@@ -216,9 +217,10 @@ class Runner {
   }
 
   async tick() {
-    const [candles, observedPrice] = await Promise.all([
+    const [candles, observedPrice, trendCandles] = await Promise.all([
       getFuturesCandles(this.symbol, INTERVAL, 500),
       getFuturesTickerPrice(this.symbol),
+      this.strategy.trendInterval ? getFuturesCandles(this.symbol, this.strategy.trendInterval, this.strategy.trendLimit) : Promise.resolve(undefined),
     ]);
     if (candles.length < WARMUP + 1) {
       log(`${this.symbol}: not enough candle data`);
@@ -232,7 +234,7 @@ class Runner {
       (this.lastProcessed === null || latest.closeTime > this.lastProcessed)
     ) {
       const series = buildSeries(candles);
-      const ctx = this.strategy.prepare(candles, series);
+      const ctx = this.strategy.prepare(candles, series, { trendCandles });
       const analysis = this.strategy.analyze(
         ctx,
         candles,
@@ -268,10 +270,10 @@ class Runner {
     const price = decision
       ? await getFuturesTickerPrice(this.symbol)
       : observedPrice;
-    return this.processCandles(candles, price, Date.now(), decision);
+    return this.processCandles(candles, price, Date.now(), decision, { trendCandles });
   }
 
-  processCandles(candles, observedPrice, executionTime, entryDecision = null) {
+  processCandles(candles, observedPrice, executionTime, entryDecision = null, contextOptions = {}) {
     if (!Number.isFinite(observedPrice) || observedPrice <= 0) {
       throw new Error(`Invalid observed execution price for ${this.symbol}`);
     }
@@ -282,7 +284,7 @@ class Runner {
     }
 
     const series = buildSeries(candles);
-    const ctx = this.strategy.prepare(candles, series);
+    const ctx = this.strategy.prepare(candles, series, contextOptions);
     const newIndices = [];
     for (let i = WARMUP; i < candles.length; i++) {
       if (candles[i].closeTime > this.lastProcessed) newIndices.push(i);
@@ -522,3 +524,4 @@ module.exports = {
   restorePortfolioRisk: () =>
     portfolioRisk.restore(store.load(PORTFOLIO_STATE_FILE)),
 };
+

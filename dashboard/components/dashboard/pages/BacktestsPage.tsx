@@ -113,12 +113,15 @@ export function BacktestsPage({
           description="Choose a coin and direction. AI is excluded; backtesting never changes your running bot."
         />
 
+        <p className="mt-3 text-sm text-amber-200">Experimental 4h trend + 15m breakout: select 15m, LONG and at least 10,000 candles. AI is excluded. Faster entries do not establish profitability.</p>
         <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <InputSelect
             label="Strategy"
             value={backtestStrategy}
             onChange={setBacktestStrategy}
             options={[
+              "4h trend + 15m breakout",
+              "Pure Breakout 40/20",
               "Current (score)",
               "Breakout 50/20",
               "Breakout 30/15",

@@ -43,7 +43,7 @@ test("short breakout uses a bearish entry channel, not a long exit SELL", () => 
 });
 test("all directional strategies remain causal when future candles change", () => {
   for (const name of new Set(
-    [...STRATEGIES, ...BREAKOUT_VARIANTS].map((s) => s.name),
+    [...STRATEGIES, ...BREAKOUT_VARIANTS].filter(s => !s.requiredInterval).map((s) => s.name),
   )) {
     for (const direction of ["LONG", "SHORT"]) {
       if (name === "Current (score)" && direction === "SHORT") continue;

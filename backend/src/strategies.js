@@ -9,6 +9,7 @@
  * analyze(i) may only use data up to and including candle i.
  */
 const { analysisAt } = require("./strategy");
+const { multiTimeframeStrategy } = require("./multiTimeframe");
 
 const result = (signal, atr, price) => ({
   signal,
@@ -85,6 +86,7 @@ function makeBreakout(entryN, exitN, options = {}) {
 }
 
 const STRATEGIES = [
+  multiTimeframeStrategy,
   {
     name: "Current (score)",
     description:
@@ -190,3 +192,4 @@ module.exports = {
   DEFAULT_STRATEGY,
   findStrategy,
 };
+

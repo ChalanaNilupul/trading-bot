@@ -225,3 +225,74 @@ It requires no `.env` or credentials and does not change the running bot.
 Repeat with `npm run baseline:sol -- --offline` after the first download.
 See [research/SOL-4H-BASELINE.md](research/SOL-4H-BASELINE.md) for exact settings,
 output paths, and reproduction limitations.
+
+## Experimental: 4h trend with 15m entries
+
+`4h trend + 15m breakout` is a separate LONG-only paper candidate. It requires
+`INTERVAL=15m`. It uses the latest **completed UTC 4h candle**: close above SMA200
+and SMA50 above SMA200. An entry requires a 15m close above the high of the prior
+40 completed 15m candles. Exit signals occur below the prior 20-candle low or when
+the completed 4h trend turns off. The existing 2 ATR stop remains active, with no
+fixed profit target or trailing stop. Entries retain the engine's existing execution
+rules. This is a fixed rule strategy, not a trained AI model.
+
+The running scanner and runner fetch 250 closed 4h candles separately from the
+15m candles. Historical tests aggregate complete groups of sixteen UTC-aligned
+15m bars. Missing/misaligned bars fail validation; incomplete 4h groups cannot
+be used. Stale higher-timeframe input cannot approve a new entry. Optional AI
+remains an additional entry veto; historical comparisons exclude AI.
+
+First run the comparison from `backend` without changing your running `.env`:
+
+```powershell
+npm test
+npm run compare:mtf
+```
+
+The command downloads 20,000 closed SOLUSDT 15m futures candles ending at the
+frozen office baseline end (2026-10-30 03:59:59.999 UTC). It compares:
+
+- Original Pure Breakout 40/20 on 4h.
+- Pure Breakout 40/20 on 15m as a control.
+- The new 4h trend / 15m entry candidate.
+- The candidate with doubled fees and slippage.
+
+All scenarios share evaluation start/split dates, $1,000 starting equity, 1x
+leverage, 0.25% risk, 10% maximum margin and the same risk limits. Warmup data
+precedes evaluation; each segment starts with a fresh wallet and no position.
+The report's `period.startTime` includes warmup; `evaluationStartTime` and
+`splitTime` identify the actual comparison windows. The old `baseline:sol`
+command remains unchanged. These already examined dates are diagnostic data,
+not an untouched holdout. More trades do not establish a profitable edge.
+
+Results, trades, candle checksum and source fingerprint are saved in
+`data/sol-mtf-comparison/report.json`. Reproduce with cached candles:
+
+```powershell
+npm run compare:mtf -- --offline
+```
+
+Send the comparison table and report before choosing a candidate. This command
+never changes bot settings or paper state and places no orders. A Binance data
+access error must be resolved with supported access; no synthetic performance
+results are substituted.
+
+For a separate paper experiment after reviewing results, use a separate checkout
+and keep the original 4h bot configuration/state for comparison:
+
+```dotenv
+BOT_SYMBOL=SOLUSDT
+DIRECTION=LONG
+STRATEGY=4h trend + 15m breakout
+INTERVAL=15m
+LEVERAGE=1
+START_BALANCE=1000
+RISK_PERCENT=0.0025
+MAX_MARGIN_PERCENT=0.1
+```
+
+The dashboard Backtests selector also exposes this candidate; use LONG, 15m,
+and at least 10,000 candles. The backend rejects incompatible interval/direction
+or insufficient warmup. Single Coin Lab skips incompatible candidates and
+candidates without enough training warmup. No candidate is automatically
+activated and no profitability is claimed.
