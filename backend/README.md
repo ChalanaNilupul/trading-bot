@@ -394,3 +394,69 @@ are **development diagnostics**, even where the historical segment is called
 trade count, drawdown and winner concentration. Reduced trade count alone is not
 success. A retest can miss winning breakouts as well as losing ones, so any
 improvement still needs separate periods and a forward paper trial before use.
+
+## Frozen retest validation across calendar quarters
+
+Run fixed historical robustness checks without changing `breakout-retest-v1`:
+
+```powershell
+npm test
+npm run validate:retest
+```
+
+The fixed plan covers **2025 Q1, Q2, Q3, Q4 and 2026 Q1, Q2, Q3**. Trading
+windows do not overlap. Each has 3,360 preceding 15m warmup candles (35 days),
+then evaluates the entire quarter. Every window starts with a fresh $1,000 paper
+wallet, 1x leverage, 0.25% risk, 10% margin cap and the same risk limits. Existing
+positions cannot carry across quarters; open positions are closed at quarter end.
+The strategy, exits and four-candle retest window are not tuned or selected.
+
+Each quarter compares current entries, current entries with doubled fees/slippage,
+retest entries, and retest entries with doubled fees/slippage: 28 comparisons in
+all. The reported quarter statistics use the **full quarterly evaluation**, not
+the engine's internal half-quarter split. All losing, empty, profitable, failed
+and missing windows remain visible. `complete` describes successful data/execution
+coverage and is not a profitability pass or permission to activate a strategy.
+
+The first run downloads closed public Binance USDⓈ-M 15m candles and exchange
+filters sequentially. It needs internet access and may take several minutes.
+It does not require Binance trading credentials or call AI. Exact timestamps,
+counts, continuity, OHLC relationships, exchange filters and checksums are
+validated before each dataset is accepted. Invalid downloads are not cached.
+Existing corrupted caches fail visibly rather than being silently replaced.
+Subsequent runs reuse valid caches; replay without network access using:
+
+```powershell
+npm run validate:retest -- --offline
+```
+
+Output is separate from all prior comparisons:
+
+- `data/sol-retest-validation/report.json`: fixed plan, rule/source fingerprints,
+  dataset fingerprints, every quarter/scenario's metrics and diagnostics summary,
+  errors and descriptive aggregate summaries. Share this file for analysis.
+- `data/sol-retest-validation/datasets/2025-Q1.json` etc.: verified datasets.
+- `data/sol-retest-validation/windows/2025-Q1/report.json` etc.: detailed trades
+  and diagnostics for completed comparisons.
+- `data/sol-retest-validation/windows/2025-Q1/diagnostics.json` etc.: load a
+  quarter into the dashboard Diagnostics page and select **Full evaluation**
+  for the same totals as the validation table. Internal split views are
+  descriptive, not an additional holdout.
+
+The overall report checkpoints after every window. Errors make the final run
+incomplete and the CLI exits nonzero, while still retaining the other windows.
+On an incomplete run, use only detailed files linked from the current report;
+older files from a previous run can remain in the output directory. Aggregates
+state completed/planned counts. Summed net P/L combines independent wallets;
+it is not a compounded portfolio return. Worst quarter drawdown is not a
+continuous portfolio drawdown. The runner never changes `.env`, bot settings,
+paper state or active profiles, and never submits orders or automatically selects
+or activates a candidate.
+
+**Research limits:** these are historical checks, not an untouched holdout or
+proof of live profitability. Office 4h reports already covered some market dates.
+The overlap flag identifies overlap with the previous 15m dataset only; a false
+flag does not guarantee unseen data. Exchange filters are captured with each
+cache rather than reconstructed historically, funding is a fixed-rate estimate,
+and slippage is simulated. If results justify further investigation, keep the
+rules frozen and measure them on incoming data in a separate paper trial.

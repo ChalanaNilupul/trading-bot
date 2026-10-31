@@ -17,6 +17,7 @@
     "baseline:sol": "node src/solBaseline.js",
     "compare:mtf": "node src/compareMtf.js",
     "diagnose:mtf": "node src/compareMtf.js --offline",
-    "compare:retest": "node src/compareMtf.js --offline --retest"
+    "compare:retest": "node src/compareMtf.js --offline --retest",
+    "validate:retest": "node src/validateRetest.js"
   }
 }
