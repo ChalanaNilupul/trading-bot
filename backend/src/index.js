@@ -190,56 +190,338 @@ class Runner {
       this.lastProcessed = saved.lastProcessed ?? null;
       this.resetToken = saved.resetToken ?? null;
       log(
-        `${this.symbol}: rest…3878 tokens truncated…<= criteria.maximumDrawdownPct;
-  }
-  const profile = chosen
-    ? {
-        symbol,
-        direction,
-        interval,
-        strategy: chosen.strategy,
-        startingBalance: 1000,
-        leverage: 1,
-        riskPercent: 0.0025,
-        maxMarginPercent: 0.1,
+        `${this.symbol}: restored state, ${this.engine.trades.length} trades, ${this.engine.position ? "IN POSITION" : "flat"}`,
+      );
+    }
+    // One-shot: applies only when RESET_HALT's value differs from the last one used (e.g. 1, then 2).
+    if (process.env.RESET_HALT && process.env.RESET_HALT !== this.resetToken) {
+      this.engine.guard.resetHalt(this.engine.cash);
+      this.resetToken = process.env.RESET_HALT;
+      this.persist();
+      log(
+        `${this.symbol}: kill switch manually reset (token ${this.resetToken})`,
+      );
+    }
+    if (loadFilters) {
+      try {
+        Object.assign(
+          this.engine.cfg,
+          await getFuturesSymbolFilters(this.symbol),
+        );
+      } catch (error) {
+        log(
+          `${this.symbol}: could not load exchange filters (${error.message}); continuing without them`,
+        );
       }
-    : null;
-  return {
-    mode: "PRESET_SELECTION",
-    aiIncluded: false,
-    liveOrdersEnabled: false,
-    symbol,
-    direction,
-    interval,
-    candlesUsed: candles.length,
-    criteria,
-    periods: {
-      start: candles[0].openTime,
-      trainingEnd: candles[Math.floor(developmentEnd * 0.75) - 1].closeTime,
-      validationEnd: candles[developmentEnd - 1].closeTime,
-      finalStart: candles[developmentEnd].openTime,
-      end: candles.at(-1).closeTime,
-    },
-    candidates,
-    selected: profile,
-    finalTest,
-    passed,
-    message: !chosen
-      ? "No preset passed training and validation. Keep this setup stopped."
-      : !passed
-        ? "The selected preset failed the final holdout. Do not activate it based on this test."
-        : "Passed these historical screens only. Validate on new forward paper data before relying on it.",
-    env: passed
-      ? `BOT_SYMBOL=${symbol}\nDIRECTION=${direction}\nSTRATEGY=${chosen.strategy}\nINTERVAL=${interval}\nSTART_BALANCE=1000\nLEVERAGE=1\nRISK_PERCENT=0.0025\nMAX_MARGIN_PERCENT=0.10`
-      : null,
-    assumptions: {
-      feeRate: common.feeRate,
-      slippage: common.slippage,
-      fundingRatePer8h: common.fundingRatePer8h,
-      split:
-        "60% training / 20% validation / 20% final holdout (indicator warmup reduces usable training)",
-      note: "No Gemini calls. No parameter fitting. Repeatedly selecting after seeing the final period invalidates its holdout status. This single-bot historical screen does not simulate the shared portfolio risk manager.",
-    },
-  };
+    }
+  }
+
+  async tick() {
+    const [candles, observedPrice, trendCandles] = await Promise.all([
+      getFuturesCandles(this.symbol, INTERVAL, 500),
+      getFuturesTickerPrice(this.symbol),
+      this.strategy.trendInterval ? getFuturesCandles(this.symbol, this.strategy.trendInterval, this.strategy.trendLimit) : Promise.resolve(undefined),
+    ]);
+    if (candles.length < WARMUP + 1) {
+      log(`${this.symbol}: not enough candle data`);
+      return false;
+    }
+    let decision = null;
+    const latest = candles[candles.length - 1];
+    if (
+      this.aiFilter.enabled &&
+      !this.engine.position &&
+      (this.lastProcessed === null || latest.closeTime > this.lastProcessed)
+    ) {
+      const series = buildSeries(candles);
+      const ctx = this.strategy.prepare(candles, series, { trendCandles });
+      const analysis = this.strategy.analyze(
+        ctx,
+        candles,
+        series,
+        candles.length - 1,
+      );
+      if (
+        (analysis.signal === "BUY" && this.direction !== "SHORT") ||
+        (analysis.signal === "SHORT" && this.direction !== "LONG")
+      ) {
+        decision = await this.aiFilter.evaluate({
+          symbol: this.symbol,
+          interval: INTERVAL,
+          strategy: this.strategy.name,
+          direction: this.direction,
+          signal: analysis.signal,
+          indicators: analysis.indicators,
+          candles: candles.slice(-60),
+        });
+        store.appendLine(`data/ai_${this.symbol}.jsonl`, {
+          at: Date.now(),
+          signal: analysis.signal,
+          interval: INTERVAL,
+          strategy: this.strategy.name,
+          candleTime: latest.closeTime,
+          provider: this.aiFilter.provider,
+          model: this.aiFilter.model,
+          ...decision,
+        });
+      }
+    }
+    // Refresh the execution quote after waiting for the AI; keep the original closed candles.
+    const price = decision
+      ? await getFuturesTickerPrice(this.symbol)
+      : observedPrice;
+    return this.processCandles(candles, price, Date.now(), decision, { trendCandles });
+  }
+
+  processCandles(candles, observedPrice, executionTime, entryDecision = null, contextOptions = {}) {
+    if (!Number.isFinite(observedPrice) || observedPrice <= 0) {
+      throw new Error(`Invalid observed execution price for ${this.symbol}`);
+    }
+    // First ever run: start from the newest closed candle instead of replaying history.
+    if (this.lastProcessed === null) {
+      this.lastProcessed = candles[candles.length - 2].closeTime;
+      this.persist();
+    }
+
+    const series = buildSeries(candles);
+    const ctx = this.strategy.prepare(candles, series, contextOptions);
+    const newIndices = [];
+    for (let i = WARMUP; i < candles.length; i++) {
+      if (candles[i].closeTime > this.lastProcessed) newIndices.push(i);
+    }
+    if (newIndices.length === 0) {
+      this.lastPrice = observedPrice;
+      return false;
+    }
+    this.lastPrice = observedPrice;
+    const latestNewIndex = newIndices[newIndices.length - 1];
+    if (
+      this.engine.pending?.type === "OPEN_LONG" ||
+      this.engine.pending?.type === "OPEN_SHORT"
+    ) {
+      this.engine.pending = null;
+      log(`${this.symbol}: discarded stale entry signal while catching up`);
+    }
+    for (const i of newIndices) {
+      const isLatest = i === latestNewIndex;
+      const analysis = isLatest
+        ? this.strategy.analyze(ctx, candles, series, i)
+        : null;
+
+      let portfolioAllowed = true;
+      let portfolioReason = null;
+
+      const isEntryCandidate =
+        analysis &&
+        ((analysis.signal === "BUY" && this.direction !== "SHORT") ||
+          (analysis.signal === "SHORT" && this.direction !== "LONG")) &&
+        !this.engine.position;
+
+      if (isEntryCandidate) {
+        const allRunners = this.allRunners;
+
+        if (!Array.isArray(allRunners) || allRunners.length === 0) {
+          portfolioAllowed = false;
+          portfolioReason = "All runners are not available";
+        } else {
+          const snapshot = buildPortfolioSnapshot(allRunners);
+
+          if (!snapshot.valid) {
+            portfolioAllowed = false;
+            portfolioReason = snapshot.reason || "Invalid portfolio snapshot";
+          } else {
+            const engineEquity = this.engine.equity(this.lastPrice);
+            const riskMultiplier =
+              this.engine.guard.riskMultiplier(engineEquity);
+
+            const estimatedStopRisk = Math.max(
+              0,
+              engineEquity *
+                Number(this.engine.cfg.riskPercent || 0) *
+                Number(riskMultiplier || 1),
+            );
+
+            const result = portfolioRisk.canOpen({
+              equity: snapshot.equity,
+              timestamp: executionTime,
+              positions: snapshot.positions,
+              candidate: {
+                symbol: this.symbol,
+                side: analysis.signal === "BUY" ? "LONG" : "SHORT",
+                estimatedStopRisk,
+              },
+            });
+
+            portfolioAllowed = result.allowed;
+            portfolioReason = result.reason;
+
+            // Persist daily-loss, drawdown and halt state after checking.
+            persistPortfolioRisk();
+          }
+        }
+      }
+
+      const aiAllowed =
+        !this.aiFilter.enabled || entryDecision?.allowed === true;
+
+      const gatedAnalysis = analysis && {
+        ...analysis,
+        entryAllowed: aiAllowed && portfolioAllowed,
+      };
+
+      if (isEntryCandidate && !portfolioAllowed) {
+        this.lastNote = `${analysis.signal} blocked by portfolio risk: ${portfolioReason}`;
+      }
+
+      this.engine.onCandle(candles[i], gatedAnalysis, {
+        deferPending: !isLatest,
+        immediate: isLatest,
+        executionPrice: observedPrice,
+        executionTime,
+      });
+      this.lastProcessed = candles[i].closeTime;
+      if (isLatest) {
+        this.lastPrice = observedPrice;
+        this.lastNote = `${analysis.signal}${!portfolioAllowed ? ` | Portfolio blocked: ${portfolioReason}` : ""}${entryDecision ? ` | AI ${entryDecision.allowed ? "approve" : "veto"}: ${entryDecision.reason}` : ""} | ${this.strategy.describe ? this.strategy.describe(ctx, candles, series, i) : ""}`;
+      }
+    }
+
+    this.persist();
+    return true;
+  }
+
+  summaryRow() {
+    const e = this.engine;
+    const m = computeMetrics({
+      trades: e.trades,
+      startingBalance: e.cfg.startingBalance,
+    });
+    const price = this.lastPrice ?? 0;
+    const eq = e.equity(price);
+    const g = e.guard.state;
+    const pos = e.position
+      ? `${e.position.side} ${e.position.quantity} @ ${e.position.entryPrice.toFixed(4)} SL ${e.position.stopPrice.toFixed(4)} LIQ ${e.position.liquidationPrice.toFixed(4)}`
+      : e.pending
+        ? `flat (queued ${e.pending.type})`
+        : "flat";
+    const guard = g.halted ? "HALTED" : g.dayBlocked ? "day-limit" : "ok";
+    return `${this.symbol.padEnd(10)} ${pos.padEnd(46)} equity $${eq.toFixed(2).padStart(8)} (${((eq / e.cfg.startingBalance - 1) * 100).toFixed(1).padStart(5)}%)  trades ${String(m.trades).padStart(3)}  PF ${fmtPF(m.profitFactor).padStart(4)}  guard ${guard}`;
+  }
 }
-module.exports = { trainSingleCoin };
+
+function printSummary(runners) {
+  console.log(
+    "\n==================================================================",
+  );
+  console.log(
+    `  PAPER BOT  ${strategy.name}  ${INTERVAL}   ${new Date().toLocaleString()}`,
+  );
+  console.log(
+    "==================================================================",
+  );
+  for (const r of runners) console.log(r.summaryRow());
+  const live = runners.filter((r) => r.lastNote);
+  if (live.length) {
+    console.log("\nLatest signal per coin:");
+    for (const r of live) console.log(`  ${r.symbol.padEnd(10)} ${r.lastNote}`);
+  }
+  console.log("");
+}
+
+async function main() {
+  log(
+    `Mode: FUTURES PAPER (no live orders) | ${LEVERAGE}x isolated | total wallet: ${START_BALANCE} USDT (${RUNNER_BALANCE.toFixed(2)} per symbol account) | Strategy: ${strategy.name} | ${INTERVAL} | coins: ${SYMBOLS.join(", ")}`,
+  );
+  const savedPortfolioRisk = store.load(PORTFOLIO_STATE_FILE);
+
+  if (savedPortfolioRisk) {
+    portfolioRisk.restore(savedPortfolioRisk);
+    log("Restored portfolio risk state.");
+  }
+
+  const runners = SYMBOLS.map((s) => new Runner(s));
+
+  // Give every Runner access to the complete portfolio.
+  for (const r of runners) {
+    r.allRunners = runners;
+  }
+
+  for (const r of runners) {
+    await r.init();
+  }
+
+  const shutdown = () => {
+    log("Shutting down, saving state.");
+
+    runners.forEach((r) => r.persist());
+    persistPortfolioRisk();
+
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  notify(
+    `Paper bot started: ${strategy.name} ${INTERVAL} on ${SYMBOLS.join(", ")}`,
+  );
+
+  let firstPass = true;
+  do {
+    let anyNew = false;
+    for (const r of runners) {
+      try {
+        if (await r.tick()) anyNew = true;
+        r.errors = 0;
+      } catch (error) {
+        r.errors++;
+        log(`${r.symbol}: tick error (${r.errors}): ${error.message}`);
+        if (r.errors === 10)
+          notify(
+            `${r.symbol}: 10 consecutive errors, bot is not getting data!`,
+          );
+      }
+    }
+
+    const portfolioSnapshot = buildPortfolioSnapshot(runners);
+
+    if (portfolioSnapshot.valid) {
+      const riskCheck = portfolioRisk.update({
+        equity: portfolioSnapshot.equity,
+        timestamp: Date.now(),
+      });
+
+      persistPortfolioRisk();
+
+      if (!riskCheck.allowed) {
+        log(`PORTFOLIO RISK HALT: ${riskCheck.reason}`);
+      }
+    } else {
+      log(`PORTFOLIO RISK CHECK SKIPPED: ${portfolioSnapshot.reason}`);
+    }
+
+    if (anyNew || firstPass) printSummary(runners);
+    firstPass = false;
+    if (!ONE_SHOT) await sleep(POLL_SECONDS * 1000);
+  } while (!ONE_SHOT);
+}
+
+if (require.main === module) main();
+
+module.exports = {
+  Runner,
+  SYMBOLS,
+  INTERVAL,
+  POLL_SECONDS,
+  START_BALANCE,
+  RUNNER_BALANCE,
+  LEVERAGE,
+  strategy,
+  DIRECTION,
+  portfolioRisk,
+  buildPortfolioSnapshot,
+  persistPortfolioRisk,
+  restorePortfolioRisk: () =>
+    portfolioRisk.restore(store.load(PORTFOLIO_STATE_FILE)),
+};
+
