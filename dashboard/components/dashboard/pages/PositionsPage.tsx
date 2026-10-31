@@ -16,7 +16,7 @@ export function PositionsPage({ runners, positions, trades, equity }: {
     <div className="space-y-6">
       <PageTitle
         title="Positions"
-        description="Monitor every currently open paper position."
+        description="Monitor every currently open position."
         icon={Wallet}
       />
 
@@ -24,7 +24,7 @@ export function PositionsPage({ runners, positions, trades, equity }: {
         <Stat
           label="Open positions"
           value={String(positions.length)}
-          sub="Across paper accounts"
+          sub="Across account positions"
           icon={Wallet}
         />
 
@@ -65,7 +65,7 @@ export function PositionsPage({ runners, positions, trades, equity }: {
         <EmptyState
           icon={Wallet}
           title="No open positions"
-          description="Your paper engine currently has no active trades."
+          description="The engine currently has no active positions."
         />
       ) : (
         <div className="grid gap-5 lg:grid-cols-2">

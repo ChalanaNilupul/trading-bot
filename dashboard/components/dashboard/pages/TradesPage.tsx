@@ -21,7 +21,7 @@ export function TradesPage({ trades, filteredTrades, tradeSearch, setTradeSearch
     <div className="space-y-6">
       <PageTitle
         title="Trades"
-        description="Complete paper trading execution history."
+        description="Completed trading execution history."
         icon={Activity}
       />
 

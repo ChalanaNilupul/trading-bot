@@ -460,3 +460,12 @@ flag does not guarantee unseen data. Exchange filters are captured with each
 cache rather than reconstructed historically, funding is a fixed-rate estimate,
 and slippage is simulated. If results justify further investigation, keep the
 rules frozen and measure them on incoming data in a separate paper trial.
+
+## Optional Binance demo orders
+
+The default remains internal paper execution. A separate SOLUSDT LONG, 1x
+isolated `FUTURES_DEMO` adapter now supports demo-account checks, journaled
+market entries, Binance-held protective stops, reduce-only exits and restart
+reconciliation. See [DEMO-TRADING.md](DEMO-TRADING.md) for backend-only credentials,
+`npm run demo:check`, the explicit `demo:smoke` round trip, dashboard operation,
+entry enablement and recovery limitations. No production execution is supported.

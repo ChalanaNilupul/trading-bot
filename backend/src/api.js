@@ -1,15 +1,12 @@
 const http = require("http");
 const crypto = require("crypto");
-const {
-  getFuturesTickers24h,
-  getFuturesCandles,
-  getFuturesSymbolFilters,
-} = require("./binance");
+const paperMarket = require("./binance");
 const { buildSeries, WARMUP } = require("./indicators");
 const store = require("./store");
 const { computeMetrics } = require("./metrics");
 const {
   Runner,
+  BOT_MODE,
   SYMBOLS,
   INTERVAL,
   POLL_SECONDS,
@@ -23,6 +20,10 @@ const {
   persistPortfolioRisk,
   restorePortfolioRisk,
 } = require("./index");
+const demoMarket = BOT_MODE === "FUTURES_DEMO" ? new (require("./binanceDemo").BinanceDemoClient)() : null;
+const getFuturesTickers24h = demoMarket ? () => demoMarket.tickers() : paperMarket.getFuturesTickers24h;
+const getFuturesCandles = demoMarket ? (symbol, interval, limit) => demoMarket.candles(symbol, interval, limit) : paperMarket.getFuturesCandles;
+const getFuturesSymbolFilters = demoMarket ? () => demoMarket.filters() : paperMarket.getFuturesSymbolFilters;
 const { runFuturesBacktest } = require("./futuresBacktester");
 const { trainSingleCoin } = require("./singleCoinLab");
 
@@ -83,7 +84,8 @@ function createRunners() {
   return group;
 }
 
-async function initRunners(loadFilters = false) {
+const initRunners = createSingleFlight(async (loadFilters = false) => {
+  try {
   if (runners.length) return;
   restorePortfolioRisk();
   runners = createRunners();
@@ -99,7 +101,7 @@ async function initRunners(loadFilters = false) {
             : "info";
       recordEvent(level, event.type, `${runner.symbol}: ${event.message}`, {
         symbol: runner.symbol,
-        source: "paper-engine",
+        source: BOT_MODE === "FUTURES_DEMO" ? "binance-demo" : "paper-engine",
       });
     };
     await runner.init(loadFilters);
@@ -107,10 +109,11 @@ async function initRunners(loadFilters = false) {
   recordEvent(
     "info",
     "SYSTEM",
-    `Initialized ${runners.length} paper runner(s)`,
+    `Initialized ${runners.length} ${BOT_MODE} runner(s)`,
     { source: "system" },
   );
-}
+  } catch (error) { for (const r of runners) r.release?.(); runners = []; throw error; }
+});
 
 async function refreshTickers() {
   const now = Date.now();
@@ -140,7 +143,7 @@ async function refreshTickers() {
 }
 
 function currentPrice(runner) {
-  return lastPrices.get(runner.symbol) ?? runner.lastPrice ?? 0;
+  return BOT_MODE === "FUTURES_DEMO" ? (runner.lastPrice ?? lastPrices.get(runner.symbol) ?? 0) : (lastPrices.get(runner.symbol) ?? runner.lastPrice ?? 0);
 }
 
 function runnerSnapshot(runner) {
@@ -173,6 +176,7 @@ function runnerSnapshot(runner) {
     : null;
   return {
     symbol: runner.symbol,
+    demo: runner.demoSnapshot?.(),
     direction: runner.direction,
     price,
     equity,
@@ -266,12 +270,13 @@ function aggregate() {
   const trades = allTrades();
   const metrics = computeMetrics({ trades, startingBalance: starting });
   return {
-    mode: "FUTURES_PAPER",
+    mode: BOT_MODE,
     marketType: "USDⓈ-M FUTURES",
     marginMode: "ISOLATED",
     leverage: LEVERAGE,
     liveOrdersEnabled: false,
-    accountingModel: "ISOLATED_MARGIN_PER_SYMBOL_ACCOUNT",
+    accountingModel: BOT_MODE === "FUTURES_DEMO" ? "CAPPED_DEMO_BUDGET_PLUS_EXCHANGE_WALLET_DELTA" : "ISOLATED_MARGIN_PER_SYMBOL_ACCOUNT",
+    demo: runners[0]?.demoSnapshot?.(),
     running,
     strategy: strategy.name,
     direction: DIRECTION,
@@ -291,7 +296,10 @@ function aggregate() {
 }
 
 const tickOnce = createSingleFlight(async () => {
-  await refreshTickers();
+  try { await refreshTickers(); } catch (error) {
+    if (BOT_MODE !== "FUTURES_DEMO") throw error;
+    recordEvent("error", "TICKER_ERROR", error.message, {source:"demo-market"});
+  }
 
   for (const runner of runners) {
     runner.lastPrice = lastPrices.get(runner.symbol) ?? runner.lastPrice;
@@ -315,7 +323,7 @@ const tickOnce = createSingleFlight(async () => {
         `${runner.symbol}: candle data fetched; ${hadNewCandle ? "new closed candle processed" : "no new closed candle"}`,
         {
           symbol: runner.symbol,
-          source: "paper-engine",
+          source: BOT_MODE === "FUTURES_DEMO" ? "binance-demo" : "paper-engine",
           candleTime: runner.lastProcessed,
         },
       );
@@ -327,7 +335,7 @@ const tickOnce = createSingleFlight(async () => {
           `${runner.symbol}: ${runner.lastNote}`,
           {
             symbol: runner.symbol,
-            source: "paper-engine",
+            source: BOT_MODE === "FUTURES_DEMO" ? "binance-demo" : "paper-engine",
             candleTime: runner.lastProcessed,
           },
         );
@@ -343,7 +351,7 @@ const tickOnce = createSingleFlight(async () => {
         "error",
         "FETCH_ERROR",
         `${runner.symbol}: ${error.message} (consecutive errors: ${runner.errors})`,
-        { symbol: runner.symbol, source: "paper-engine" },
+        { symbol: runner.symbol, source: BOT_MODE === "FUTURES_DEMO" ? "binance-demo" : "paper-engine" },
       );
 
       console.error(`${runner.symbol}: ${error.message}`);
@@ -379,7 +387,7 @@ async function botLoop() {
 
 async function startBot() {
   await initRunners(false);
-  if (!filtersLoaded) {
+  if (!filtersLoaded && BOT_MODE !== "FUTURES_DEMO") {
     for (const r of runners) {
       try {
         Object.assign(r.engine.cfg, await getFuturesSymbolFilters(r.symbol));
@@ -390,11 +398,12 @@ async function startBot() {
     filtersLoaded = true;
   }
   if (!running) {
+    for (const r of runners) r.entryPaused = false;
     running = true;
     recordEvent(
       "info",
       "BOT_START",
-      `Futures paper engine started: ${strategy.name}, ${INTERVAL}, ${LEVERAGE}x isolated, ${SYMBOLS.length} symbols; live orders disabled`,
+      `${BOT_MODE} engine started: ${strategy.name}, ${INTERVAL}, ${LEVERAGE}x isolated, ${SYMBOLS.length} symbols; live orders disabled`,
       { source: "system" },
     );
     botLoop();
@@ -403,10 +412,11 @@ async function startBot() {
 
 function stopBot() {
   running = false;
+  for (const r of runners) r.entryPaused = true;
   recordEvent(
     "warn",
     "BOT_STOP",
-    "Paper engine stop requested; saving runner state",
+    BOT_MODE === "FUTURES_DEMO" ? "Demo polling stopped; exchange-held stop remains. Use Close demo position to flatten." : "Paper engine stop requested; saving runner state",
     { source: "system" },
   );
   runners.forEach((r) => r.persist());
@@ -447,7 +457,7 @@ async function handler(req, res) {
     if (req.method === "GET" && url.pathname === "/api/health")
       return json(res, 200, {
         ok: true,
-        mode: "FUTURES_PAPER",
+        mode: BOT_MODE,
         marketType: "USDⓈ-M FUTURES",
         liveOrdersEnabled: false,
         running,
@@ -470,9 +480,13 @@ async function handler(req, res) {
           lastCandleAt,
           lastBinanceError,
           running,
-          mode: "FUTURES_PAPER",
+          mode: BOT_MODE,
         },
       });
+    }
+    if (url.pathname === "/api/demo/close" && req.method === "POST") {
+      if (BOT_MODE !== "FUTURES_DEMO") return json(res, 409, {error:"Demo mode is not active"});
+      await runners[0].closeDemo();return json(res, 200, runners[0].demoSnapshot());
     }
     if (req.method === "GET" && url.pathname === "/api/status")
       return json(res, 200, {
@@ -481,7 +495,7 @@ async function handler(req, res) {
           lastSuccessfulBinanceAt,
           lastCandleAt,
           lastBinanceError,
-          mode: "FUTURES_PAPER",
+          mode: BOT_MODE,
         },
       });
     if (req.method === "GET" && url.pathname === "/api/positions")
@@ -519,9 +533,8 @@ async function handler(req, res) {
       portfolioRisk.reset({ equity: snapshot.equity, timestamp: Date.now() });
       persistPortfolioRisk();
       for (const r of runners) {
-        const price = currentPrice(r);
-        r.engine.guard.resetHalt(r.engine.equity(price));
-        r.persist();
+        if (r.resetHalt) await r.resetHalt();
+        else { const price = currentPrice(r); r.engine.guard.resetHalt(r.engine.equity(price)); r.persist(); }
       }
       return json(res, 200, { ok: true });
     }
@@ -613,7 +626,7 @@ server.listen(PORT, HOST, () => {
   recordEvent(
     "info",
     "API_READY",
-    `TradeLab API listening on http://${HOST}:${PORT}; Futures paper mode only; live orders disabled`,
+    `TradeLab API listening on http://${HOST}:${PORT}; ${BOT_MODE}; production orders disabled`,
     { source: "system" },
   );
   console.log(`TradeLab API listening on http://${HOST}:${PORT}`);

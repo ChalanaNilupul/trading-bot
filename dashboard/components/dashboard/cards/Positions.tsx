@@ -11,7 +11,7 @@ export function PositionsCard({ positions }: { positions: Runner[] }) {
       <div className="flex items-center justify-between">
         <SectionHeader
           title="Open positions"
-          description="Live paper positions"
+          description="Current account positions"
         />
 
         <span className="rounded-lg bg-white/5 px-2 py-1 text-xs text-zinc-400">
@@ -26,7 +26,7 @@ export function PositionsCard({ positions }: { positions: Runner[] }) {
           <EmptyState
             icon={Wallet}
             title="No open positions"
-            description="No active paper positions."
+            description="No active positions."
           />
         )}
       </div>
@@ -68,7 +68,7 @@ export function PositionCard({ position: p }: { position: Runner }) {
 
         <PositionValue label="Stop" value={price(pos.stopPrice)} red />
 
-        <PositionValue label="Target" value={price(pos.targetPrice)} green />
+        <PositionValue label="Target" value={pos.targetPrice == null ? "Disabled" : price(pos.targetPrice)} green />
 
         <PositionValue label="Isolated margin" value={money(pos.margin || 0)} />
 

@@ -10,7 +10,7 @@ export function RecentTrades({ trades }: { trades: Trade[] }) {
     <section className="glass rounded-2xl p-5">
       <SectionHeader
         title="Recent trades"
-        description="Completed paper executions"
+        description="Completed executions"
       />
 
       <div className="mt-5 space-y-1">

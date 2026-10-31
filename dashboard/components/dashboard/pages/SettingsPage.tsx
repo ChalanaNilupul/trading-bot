@@ -92,7 +92,7 @@ export function SettingsPage({ status, busy, command, load }: {
 
           <SystemCard icon={Database} label="Market data" value="Binance" />
 
-          <SystemCard icon={Cpu} label="Execution" value="Paper engine" />
+          <SystemCard icon={Cpu} label="Execution" value={status?.mode === "FUTURES_DEMO" ? "Binance demo" : "Paper engine"} />
 
           <SystemCard icon={Terminal} label="Dashboard" value="Next.js" />
         </div>

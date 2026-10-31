@@ -28,13 +28,16 @@ const { AIEntryFilter } = require("./aiFilter");
 const { directedStrategy, normalizeDirection } = require("./direction");
 const { PortfolioRiskManager } = require("./portfolioRiskManager");
 
+const { mode } = require("./demoConfig");
+const BOT_MODE = mode();
+
 const DEFAULT_SYMBOLS =
   "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,AVAXUSDT,LINKUSDT";
 const SYMBOLS = (
   process.env.BOT_SYMBOL ||
   process.env.SYMBOLS ||
   process.env.SYMBOL ||
-  DEFAULT_SYMBOLS
+  (BOT_MODE === "FUTURES_DEMO" ? "SOLUSDT" : DEFAULT_SYMBOLS)
 )
   .split(",")
   .map((s) => s.trim().toUpperCase())
@@ -42,7 +45,7 @@ const SYMBOLS = (
 const INTERVAL = process.env.INTERVAL || "4h";
 const POLL_SECONDS = Number(process.env.POLL_SECONDS || 60);
 const START_BALANCE = Number(process.env.START_BALANCE || 1000);
-const LEVERAGE = Number(process.env.LEVERAGE || 5);
+const LEVERAGE = Number(process.env.LEVERAGE || (BOT_MODE === "FUTURES_DEMO" ? 1 : 5));
 const RUNNER_BALANCE = START_BALANCE / SYMBOLS.length;
 const ONE_SHOT = process.env.ONE_SHOT === "1";
 
@@ -74,7 +77,7 @@ const portfolioRisk = new PortfolioRiskManager({
   ),
 });
 
-const PORTFOLIO_STATE_FILE = "data/portfolio-risk-state.json";
+const PORTFOLIO_STATE_FILE = BOT_MODE === "FUTURES_DEMO" ? "data/demo-portfolio-risk-state.json" : "data/portfolio-risk-state.json";
 
 function persistPortfolioRisk() {
   store.save(PORTFOLIO_STATE_FILE, portfolioRisk.snapshot());
@@ -116,6 +119,22 @@ function buildPortfolioSnapshot(runners) {
 
 class Runner {
   constructor(symbol, options = {}) {
+    if (BOT_MODE === "FUTURES_DEMO") {
+      if (SYMBOLS.length !== 1 || SYMBOLS[0] !== "SOLUSDT") throw Error("Demo mode requires exactly SOLUSDT");
+      const { DemoRunner } = require("./demoRunner");
+      return new DemoRunner(symbol, {
+        ...options, direction: DIRECTION, leverage: LEVERAGE, budget: START_BALANCE,
+        strategy, interval: INTERVAL,
+        portfolioUpdate: equity => { const result = portfolioRisk.update({equity,timestamp:Date.now()}); persistPortfolioRisk(); return result; },
+        portfolioGate: (runner, estimatedStopRisk) => {
+          const snapshot = buildPortfolioSnapshot(runner.allRunners || []);
+          if (!snapshot.valid || !runner.allRunners?.length) return { allowed:false, reason:"Demo portfolio snapshot unavailable" };
+          const result = portfolioRisk.canOpen({ equity:snapshot.equity, timestamp:Date.now(), positions:snapshot.positions,
+            candidate:{symbol,side:"LONG",estimatedStopRisk} });
+          persistPortfolioRisk();return result;
+        },
+      });
+    }
     this.symbol = symbol;
     this.aiFilter = options.aiFilter || new AIEntryFilter();
     this.strategy = options.strategy || strategy;
@@ -414,7 +433,7 @@ function printSummary(runners) {
     "\n==================================================================",
   );
   console.log(
-    `  PAPER BOT  ${strategy.name}  ${INTERVAL}   ${new Date().toLocaleString()}`,
+    `  ${BOT_MODE} BOT  ${strategy.name}  ${INTERVAL}   ${new Date().toLocaleString()}`,
   );
   console.log(
     "==================================================================",
@@ -430,7 +449,7 @@ function printSummary(runners) {
 
 async function main() {
   log(
-    `Mode: FUTURES PAPER (no live orders) | ${LEVERAGE}x isolated | total wallet: ${START_BALANCE} USDT (${RUNNER_BALANCE.toFixed(2)} per symbol account) | Strategy: ${strategy.name} | ${INTERVAL} | coins: ${SYMBOLS.join(", ")}`,
+    `Mode: ${BOT_MODE} (production trading disabled) | ${LEVERAGE}x isolated | total wallet: ${START_BALANCE} USDT (${RUNNER_BALANCE.toFixed(2)} per symbol account) | Strategy: ${strategy.name} | ${INTERVAL} | coins: ${SYMBOLS.join(", ")}`,
   );
   const savedPortfolioRisk = store.load(PORTFOLIO_STATE_FILE);
 
@@ -510,6 +529,8 @@ if (require.main === module) main();
 
 module.exports = {
   Runner,
+  BOT_MODE,
+  main,
   SYMBOLS,
   INTERVAL,
   POLL_SECONDS,
