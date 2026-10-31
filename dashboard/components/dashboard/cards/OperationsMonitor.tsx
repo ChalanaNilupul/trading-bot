@@ -25,13 +25,13 @@ export function OperationsMonitor({
         <div>
           <SectionHeader
             title="Live backend operations"
-            description="Timestamped events emitted by the backend. This is paper trading only; no real Binance orders are sent."
+            description={status?.mode === "FUTURES_DEMO" ? "Binance demo events and virtual-fund orders. Production trading is disabled." : "Timestamped paper-engine events; exchange orders are disabled."}
           />
         </div>
         <span
           className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${status?.running ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-amber-400/20 bg-amber-400/10 text-amber-300"}`}
         >
-          {status?.running ? "PAPER ENGINE RUNNING" : "PAPER ENGINE STOPPED"}
+          {`${status?.mode === "FUTURES_DEMO" ? "DEMO" : "PAPER"} ENGINE ${status?.running ? "RUNNING" : "STOPPED"}`}
         </span>
       </div>
 
@@ -77,7 +77,7 @@ export function OperationsMonitor({
       <div className="max-h-[420px] overflow-y-auto">
         {events.length === 0 ? (
           <div className="p-8 text-center text-xs leading-5 text-zinc-500">
-            No backend events recorded yet. Start the paper engine to see
+            No backend events recorded yet. Start the engine to see
             fetches, candle evaluations, signals, risk decisions and trade
             events here.
           </div>

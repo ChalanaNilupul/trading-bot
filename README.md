@@ -1,6 +1,8 @@
 # TradeLab V2
 
-Personal paper-trading bot + dashboard.
+Personal paper-trading bot + dashboard. Optional SOLUSDT Futures demo execution
+uses virtual funds only; see [demo setup](backend/DEMO-TRADING.md). Production
+order execution is disabled.
 
 ## Structure
 

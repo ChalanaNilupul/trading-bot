@@ -22,6 +22,7 @@ const POST_ALLOWED = new Set([
   "/api/backtest",
   "/api/train",
   "/api/ai/test",
+  "/api/demo/close",
 ]);
 
 async function forward(

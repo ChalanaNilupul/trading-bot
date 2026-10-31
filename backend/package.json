@@ -18,6 +18,9 @@
     "compare:mtf": "node src/compareMtf.js",
     "diagnose:mtf": "node src/compareMtf.js --offline",
     "compare:retest": "node src/compareMtf.js --offline --retest",
-    "validate:retest": "node src/validateRetest.js"
+    "validate:retest": "node src/validateRetest.js",
+    "demo:check": "node --env-file=.env src/demoCheck.js",
+    "demo": "node --env-file=.env src/demoMain.js",
+    "demo:smoke": "node --env-file=.env src/demoSmoke.js"
   }
 }

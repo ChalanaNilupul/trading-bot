@@ -30,6 +30,7 @@ export type Status = {
     mode: string;
   };
   mode: string;
+  demo?: {environment:string; endpoint:string; allowEntries:boolean; notionalCap:number; budget:number; accountWallet:number|null; accountAvailable:number|null; allocatedEquity:number; protection:string; fault:string|null; pendingEntry:string|null; pendingClose:string|null; pendingAccounting:boolean; connected:boolean; lastSyncAt:number|null};
   direction?: string;
   running: boolean;
   strategy: string;

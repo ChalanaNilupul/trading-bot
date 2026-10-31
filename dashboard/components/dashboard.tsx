@@ -490,11 +490,11 @@ export default function Dashboard() {
           <div className="flex items-center gap-2 text-xs font-medium text-emerald-300">
             <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
 
-            {status?.running ? "Paper engine running" : "Paper engine stopped"}
+            {`${status?.mode === "FUTURES_DEMO" ? "Demo" : "Paper"} engine ${status?.running ? "running" : "stopped"}`}
           </div>
 
           <div className="mt-2 text-[11px] leading-5 text-zinc-500">
-            No real orders can be placed from this dashboard.
+            Production trading is disabled. Demo mode can place virtual-fund orders.
           </div>
         </div>
       </aside>

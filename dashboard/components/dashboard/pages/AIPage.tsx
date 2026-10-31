@@ -126,7 +126,7 @@ export function AIPage() {
               [
                 "Entry filter",
                 data.enabled ? "Enabled" : "Disabled",
-                data.running ? "Paper engine running" : "Paper engine stopped",
+                data.running ? "Trading engine running" : "Trading engine stopped",
               ],
               [
                 "Provider / model",
@@ -238,7 +238,7 @@ export function AIPage() {
               <SectionHeader title="When does AI run?" icon={ShieldCheck} />
               <ol className="mt-4 list-decimal space-y-3 pl-5 text-sm leading-6 text-zinc-400">
                 <li>
-                  The paper engine processes a newly closed {data.interval}{" "}
+                  The trading engine processes a newly closed {data.interval}{" "}
                   candle.
                 </li>
                 <li>
@@ -295,7 +295,7 @@ export function AIPage() {
                   description={
                     data.enabled
                       ? `AI is waiting for an eligible strategy entry on ${data.interval} candles. A review may take time. A log file is created only after a review; you do not need to create it yourself.`
-                      : "AI is disabled. Enable it in backend .env, restart the backend, then start the paper bot."
+                      : "AI is disabled. Enable it in backend .env, restart the backend, then start the bot."
                   }
                 />
               </div>

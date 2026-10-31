@@ -19,6 +19,7 @@ import {
 } from "recharts";
 import { SectionHeader, Stat } from "../ui";
 import { RiskCard } from "../cards/RiskCard";
+import { DemoCard } from "../cards/DemoCard";
 import { OperationsMonitor } from "../cards/OperationsMonitor";
 import { MarketTable } from "../cards/MarketTable";
 import { PositionsCard } from "../cards/Positions";
@@ -67,14 +68,16 @@ export function OverviewPage({
           </h1>
 
           <p className="mt-1 text-sm text-zinc-500">
-            Live paper account state from your Node trading engine.
+            {status?.mode === "FUTURES_DEMO" ? "Binance demo execution with virtual funds and a capped bot budget." : "Live paper account state from your Node trading engine."}
           </p>
         </div>
       </section>
 
+      {status?.mode === "FUTURES_DEMO" && <DemoCard status={status} />}
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <Stat
-          label="Paper equity"
+          label={status?.mode === "FUTURES_DEMO" ? "Allocated demo equity" : "Paper equity"}
           value={money(status?.portfolio.equity || 0)}
           sub={`${pct(status?.portfolio.returnPct || 0)} all time`}
           positive={(status?.portfolio.returnPct || 0) >= 0}
