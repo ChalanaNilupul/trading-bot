@@ -214,3 +214,14 @@ portfolio risk gates. Research reports are displayed for the current page
 session; they are not trained model files. The existing CLI `npm run tournament`
 also respects `BOT_SYMBOL` and `DIRECTION` and includes direction in its CSV names;
 it remains exploratory because its ranking uses out-of-sample results.
+
+## Frozen SOL 4h office baseline
+
+Run `npm run baseline:sol` from `backend` to reproduce the saved SOLUSDT LONG
+Pure Breakout 40/20 office settings on their original 5,000-candle 4h date range.
+It archives/checksums the input candles, compares saved metrics, and produces
+trade-level diagnostics plus filtered-strategy and higher-cost comparisons.
+It requires no `.env` or credentials and does not change the running bot.
+Repeat with `npm run baseline:sol -- --offline` after the first download.
+See [research/SOL-4H-BASELINE.md](research/SOL-4H-BASELINE.md) for exact settings,
+output paths, and reproduction limitations.

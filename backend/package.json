@@ -13,6 +13,7 @@
     "test": "node test/selftest.js && node --test test/*.test.js",
     "compare": "node src/compare.js",
     "api": "node --env-file=.env src/api.js",
-    "tournament": "node --env-file=.env src/futuresTournament.js"
+    "tournament": "node --env-file=.env src/futuresTournament.js",
+    "baseline:sol": "node src/solBaseline.js"
   }
 }
