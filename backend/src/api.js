@@ -115,7 +115,7 @@ const initRunners = createSingleFlight(async (loadFilters = false) => {
   } catch (error) { for (const r of runners) r.release?.(); runners = []; throw error; }
 });
 
-async function refreshTickers() {
+const refreshTickers = createSingleFlight(async () => {
   const now = Date.now();
   if (now - tickerCache.at < 15000) return tickerCache.data;
   const rows = await getFuturesTickers24h();
@@ -140,7 +140,7 @@ async function refreshTickers() {
   tickerCache = { at: now, data: map };
   for (const [symbol, quote] of map) lastPrices.set(symbol, quote.price);
   return map;
-}
+});
 
 function currentPrice(runner) {
   return BOT_MODE === "FUTURES_DEMO" ? (runner.lastPrice ?? lastPrices.get(runner.symbol) ?? 0) : (lastPrices.get(runner.symbol) ?? runner.lastPrice ?? 0);

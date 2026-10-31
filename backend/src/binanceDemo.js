@@ -4,16 +4,23 @@ const READ = new Set(['/fapi/v1/time','/fapi/v1/exchangeInfo','/fapi/v1/klines',
 const WRITE = new Set(['POST /fapi/v1/order','DELETE /fapi/v1/order','POST /fapi/v1/algoOrder','DELETE /fapi/v1/algoOrder','POST /fapi/v1/leverage','POST /fapi/v1/marginType']);
 const PUBLIC = new Set(['/fapi/v1/time','/fapi/v1/exchangeInfo','/fapi/v1/klines','/fapi/v1/ticker/24hr','/fapi/v1/ticker/price','/fapi/v1/premiumIndex']);
 class DemoAPIError extends Error {
-  constructor(message, code, uncertain=false) { super(message); this.code=code; this.uncertain=uncertain; }
+  constructor(message, code, uncertain=false, retryableRead=false) { super(message); this.code=code; this.uncertain=uncertain; this.retryableRead=retryableRead; }
 }
 class BinanceDemoClient {
-  constructor({apiKey=process.env.BINANCE_DEMO_API_KEY,apiSecret=process.env.BINANCE_DEMO_API_SECRET,fetchImpl=global.fetch,now=Date.now,baseUrl}={}) {
+  constructor({apiKey=process.env.BINANCE_DEMO_API_KEY,apiSecret=process.env.BINANCE_DEMO_API_SECRET,fetchImpl=global.fetch,now=Date.now,baseUrl,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}) {
     if(baseUrl && baseUrl!==DEMO_URL) throw new Error('Demo client only permits the fixed Binance demo host');
-    this.key=apiKey||'';this.secret=apiSecret||'';this.fetch=fetchImpl;this.now=now;this.offset=0;
+    this.key=apiKey||'';this.secret=apiSecret||'';this.fetch=fetchImpl;this.now=now;this.offset=0;this.wait=wait;
     this.keyFingerprint=crypto.createHash('sha256').update(this.key).digest('hex').slice(0,16);
   }
   credentials() {if(!this.key || !this.secret)throw new Error('Set BINANCE_DEMO_API_KEY and BINANCE_DEMO_API_SECRET in backend/.env');}
   async request(method,route,params={}) {
+    // Only reads may be repeated. Rebuild/sign every attempt with a fresh timestamp.
+    for(let attempt=0;attempt<2;attempt++) {
+      try{return await this.requestOnce(method,route,params);}
+      catch(error){if(method!=='GET'||!error.retryableRead||attempt===1)throw error;await this.wait(300);}
+    }
+  }
+  async requestOnce(method,route,params={}) {
     if((method==='GET'?!READ.has(route):!WRITE.has(`${method} ${route}`)))throw new Error('Unsupported demo API operation');
     if(params.symbol && params.symbol!=='SOLUSDT')throw new Error('Demo execution is restricted to SOLUSDT');
     if(method !== 'GET') {
@@ -30,19 +37,27 @@ class BinanceDemoClient {
     const headers={};if(signed)headers['X-MBX-APIKEY']=this.key;
     let response,data;
     try {
-      response=await this.fetch(`${DEMO_URL}${route}?${query}`,{method,headers,redirect:'error',signal:AbortSignal.timeout(8000)});
+      response=await this.fetch(`${DEMO_URL}${route}?${query}`,{method,headers,redirect:'error',signal:AbortSignal.timeout(method==='GET'?5000:8000)});
       data=await response.json();
-    } catch {throw new DemoAPIError('Binance demo request failed or timed out; query saved client ID before any retry',null,method!=='GET');}
+    } catch {
+      const read=method==='GET',transient=!response||response.ok||response.status>=500||response.status===408;
+      throw new DemoAPIError(read?`Binance demo GET ${route} failed (network/timeout or invalid response); this read did not submit an order`:'Binance demo mutation failed or timed out; query saved client ID before any retry',null,!read,read&&transient);
+    }
     if(!response.ok || (Number.isFinite(data?.code)&&data.code<0)) {
       let message=String(data?.msg||'Request rejected').slice(0,250);
       for(const value of [this.key,this.secret,query.get('signature')])if(value)message=message.split(value).join('[redacted]');
-      throw new DemoAPIError(`Binance demo ${response.status}: ${message}`,data?.code,method!=='GET'&&(response.status>=500||response.status===408||[-1006,-1007].includes(data?.code)));
+      throw new DemoAPIError(`Binance demo ${response.status}: ${message}`,data?.code,method!=='GET'&&(response.status>=500||response.status===408||[-1006,-1007].includes(data?.code)),method==='GET'&&(response.status>=500||response.status===408));
     }
     return data;
   }
   async syncTime(){const r=await this.request('GET','/fapi/v1/time');if(!Number.isFinite(r.serverTime))throw Error('Invalid demo server time');this.offset=r.serverTime-this.now();}
   async candles(symbol,interval,limit=500){const rows=await this.request('GET','/fapi/v1/klines',{symbol,interval,limit:Math.min(limit+1,1000)});return rows.map(c=>({openTime:c[0],open:+c[1],high:+c[2],low:+c[3],close:+c[4],volume:+c[5],closeTime:c[6]})).filter(c=>c.closeTime+2000<=this.now()+this.offset).slice(-limit);}
-  tickers(){return this.request('GET','/fapi/v1/ticker/24hr');}
+  async tickers(){
+    const data=await this.request('GET','/fapi/v1/ticker/24hr',{symbol:'SOLUSDT'});
+    const rows=Array.isArray(data)?data.filter(r=>r.symbol==='SOLUSDT'):[data];
+    if(rows.length!==1||rows[0]?.symbol!=='SOLUSDT'||!(Number(rows[0].lastPrice)>0))throw Error('Invalid SOLUSDT demo ticker response');
+    return rows;
+  }
   async price(){return Number((await this.request('GET','/fapi/v1/ticker/price',{symbol:'SOLUSDT'})).price);}
   async filters(){
     const info=await this.request('GET','/fapi/v1/exchangeInfo');const s=info.symbols?.find(s=>s.symbol==='SOLUSDT');

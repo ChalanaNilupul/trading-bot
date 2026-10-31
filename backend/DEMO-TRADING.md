@@ -160,3 +160,15 @@ The implementation follows Binance's current demo host and conditional-order API
 
 - https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info
 - https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade
+
+### Transient market-data errors
+
+A GET ticker/candle/account failure does not mean an order submission failed.
+Demo reads retry once after 300 ms for network/invalid-response failures, HTTP
+408 or 5xx (five-second timeout per read attempt). Each private read is signed
+again with a fresh timestamp. Authentication errors, missing-order responses,
+403/418 blocks and 429 rate limits are not retried. Mutations retain their
+eight-second timeout and are never automatically retried. Ticker reads request
+SOLUSDT only, and overlapping dashboard/runner ticker refreshes share one request.
+If reads continue failing, investigate connectivity or Binance demo availability;
+never delete execution journals or rerun the smoke order to repair a data read.

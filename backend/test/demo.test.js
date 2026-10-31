@@ -216,3 +216,49 @@ test('confirmed entry fills receive a stop even when position snapshots lag',asy
  assert.equal([...e.algos.values()][0].algoStatus,'NEW');assert.ok(e.qty>0);assert.equal(r.state.trades.length,0);
  e.hidePosition=false;await r.reconcile(true);assert.equal(r.demoSnapshot().protection,'VERIFIED');
 });
+test('transient read network failures and 5xx responses retry once with a fresh signature',async()=>{
+ let count=0,time=100000;const signed=[];
+ const client=new BinanceDemoClient({apiKey:'demo-key',apiSecret:'demo-secret',now:()=>++time,wait:async()=>{},fetchImpl:async raw=>{
+  signed.push(new URL(raw).searchParams.get('timestamp'));if(++count===1)throw Error('connection reset');return {ok:true,status:200,json:async()=>({ok:true})};
+ }});
+ assert.deepEqual(await client.request('GET','/fapi/v2/account'),{ok:true});assert.equal(count,2);assert.notEqual(signed[0],signed[1]);
+ count=0;client.fetch=async()=>++count===1?{ok:false,status:503,json:async()=>({msg:'Unavailable'})}:{ok:true,status:200,json:async()=>({ok:true})};
+ await client.request('GET','/fapi/v2/account');assert.equal(count,2);
+});
+test('persistent read failures stop after two attempts and never claim an uncertain submitted order',async()=>{
+ let count=0;
+ const client=new BinanceDemoClient({wait:async()=>{},fetchImpl:async()=>{count++;throw Error('private detail must not leak');}});
+ await assert.rejects(client.request('GET','/fapi/v1/time'),e=>e.uncertain===false&&e.message.includes('GET /fapi/v1/time')&&!e.message.includes('saved client ID')&&!e.message.includes('private detail'));
+ assert.equal(count,2);
+});
+test('mutations never retry after network or server failures',async()=>{
+ let count=0;const client=new BinanceDemoClient({apiKey:'demo-key',apiSecret:'demo-secret',wait:async()=>{},fetchImpl:async()=>{count++;throw Error('timeout');}});
+ const order={symbol:'SOLUSDT',side:'BUY',type:'MARKET',positionSide:'BOTH',quantity:.1,newClientOrderId:'tbD-fixture'};
+ await assert.rejects(client.request('POST','/fapi/v1/order',order),e=>e.uncertain===true&&e.message.includes('saved client ID'));assert.equal(count,1);
+ count=0;client.fetch=async()=>{count++;return {ok:false,status:503,json:async()=>({msg:'Unknown error'})};};
+ await assert.rejects(client.request('POST','/fapi/v1/order',order),e=>e.uncertain===true);assert.equal(count,1);
+});
+test('authentication, missing orders, bans and rate limits are not retried',async()=>{
+ for(const status of [400,401,403,418,429]){
+  let count=0;const client=new BinanceDemoClient({apiKey:'demo-key',apiSecret:'demo-secret',wait:async()=>{},fetchImpl:async()=>{count++;return {ok:false,status,json:async()=>({code:-2013,msg:'Request rejected'})};}});
+  await assert.rejects(client.request('GET','/fapi/v1/order',{symbol:'SOLUSDT',origClientOrderId:'tbD-fixture'}));assert.equal(count,1);
+ }
+});
+test('demo ticker fetch scopes to SOLUSDT and normalizes its single-object response',async()=>{
+ let query;
+ const client=new BinanceDemoClient({fetchImpl:async raw=>{query=new URL(raw);return {ok:true,status:200,json:async()=>({symbol:'SOLUSDT',lastPrice:'96',priceChangePercent:'1',quoteVolume:'1000'})};}});
+ const rows=await client.tickers();assert.equal(query.searchParams.get('symbol'),'SOLUSDT');assert.equal(rows.length,1);assert.equal(rows[0].symbol,'SOLUSDT');
+});
+test('concurrent market scans share a single in-flight demo ticker request',async t=>{
+ const {spawn}=require('node:child_process'),net=require('node:net');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'demo-ticker-api-'));let child;
+ t.after(async()=>{if(child&&child.exitCode===null){child.kill();await new Promise(resolve=>child.once('exit',resolve));}fs.rmSync(dir,{recursive:true,force:true});});
+ const reserved=net.createServer();await new Promise(resolve=>reserved.listen(0,'127.0.0.1',resolve));const port=reserved.address().port;await new Promise(resolve=>reserved.close(resolve));
+ const modulePath=path.resolve(__dirname,'../src/binanceDemo.js'),counter=path.join(dir,'counter.txt');
+ fs.writeFileSync(path.join(dir,'mock.cjs'),`const crypto=require('crypto'),assert=require('node:assert/strict'),fs=require('fs');const {BinanceDemoClient,DEMO_URL}=require(${JSON.stringify(modulePath)});const fakeExchange=${fakeExchange.toString()};const exchange=fakeExchange();let count=0;global.fetch=async(raw,options)=>{if(new URL(raw).pathname==='/fapi/v1/ticker/24hr'){assert.equal(new URL(raw).searchParams.get('symbol'),'SOLUSDT');fs.writeFileSync(${JSON.stringify(counter)},String(++count));await new Promise(r=>setTimeout(r,100));}return exchange.fetch(raw,options);};`);
+ child=spawn(process.execPath,['-r',path.join(dir,'mock.cjs'),path.resolve(__dirname,'../src/api.js')],{cwd:dir,env:{...process.env,API_HOST:'127.0.0.1',API_PORT:String(port),API_KEY:'local-demo-test-api-key',BOT_MODE:'FUTURES_DEMO',BOT_SYMBOL:'SOLUSDT',DIRECTION:'LONG',LEVERAGE:'1',STRATEGY:'Pure Breakout 40/20',INTERVAL:'4h',START_BALANCE:'1000',RISK_PERCENT:'.0025',MAX_MARGIN_PERCENT:'.1',BINANCE_DEMO_API_KEY:'demo-key',BINANCE_DEMO_API_SECRET:'demo-secret',DEMO_ALLOW_ENTRIES:'0',AUTOSTART:'0',AI_ENABLED:'0'},stdio:['ignore','pipe','pipe']});
+ let logs='';child.stdout.on('data',d=>{logs+=d});child.stderr.on('data',d=>{logs+=d});const url=`http://127.0.0.1:${port}`;
+ let ready=false;for(let i=0;i<80;i++){try{if((await fetch(url+'/api/health')).ok){ready=true;break;}}catch{}if(child.exitCode!==null)break;await new Promise(r=>setTimeout(r,50));}assert.ok(ready,logs);
+ const replies=await Promise.all(Array.from({length:5},()=>fetch(url+'/api/markets',{headers:{'X-API-Key':'local-demo-test-api-key'}})));
+ assert.ok(replies.every(r=>r.ok),logs);assert.equal(fs.readFileSync(counter,'utf8'),'1');
+});
