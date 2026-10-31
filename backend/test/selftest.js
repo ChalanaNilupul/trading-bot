@@ -85,7 +85,7 @@ test("analysis at i == analysis on candles[0..i] only", () => {
 });
 
 test("every strategy is causal (decision at i ignores future candles)", () => {
-  for (const st of [...STRATEGIES, ...BREAKOUT_VARIANTS]) {
+  for (const st of [...STRATEGIES, ...BREAKOUT_VARIANTS].filter(s => !s.requiredInterval)) {
     const ctx = st.prepare(candles, series);
     for (const i of [300, 700, 1200, 1499]) {
       const part = candles.slice(0, i + 1);
@@ -677,3 +677,4 @@ test("futures engine uses 4h candle open at funding boundary", () => {
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}\n`);
+

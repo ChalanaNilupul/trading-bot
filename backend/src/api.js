@@ -213,7 +213,8 @@ async function scanMarkets() {
       lastBinanceError = null;
       if (candles.length < WARMUP + 1) continue;
       const series = buildSeries(candles);
-      const ctx = strategy.prepare(candles, series);
+      const trendCandles = strategy.trendInterval ? await getFuturesCandles(symbol, strategy.trendInterval, strategy.trendLimit) : undefined;
+      const ctx = strategy.prepare(candles, series, { trendCandles });
       const i = candles.length - 1;
       const analysis = strategy.analyze(ctx, candles, series, i);
       const ticker = tickers.get(symbol) || {};
@@ -221,7 +222,7 @@ async function scanMarkets() {
       recordEvent(
         "info",
         "SCAN",
-        `${symbol} ${analysis.signal} signal (${analysis.score}/${analysis.maxScore}) on ${INTERVAL} candle`,
+        `${symbol} ${analysis.signal} signal (${analysis.score}/${analysis.maxScore}) on ${INTERVAL} candle${strategy.trendInterval ? ` | ${analysis.reasons?.[0] || ""}` : ""}`,
         { symbol, source: "market-scanner", candleTime: candles[i].closeTime },
       );
       output.push({
@@ -622,3 +623,4 @@ if (process.env.AUTOSTART === "1")
     recordEvent("error", "START_ERROR", error.message, { source: "system" });
     console.error(error);
   });
+

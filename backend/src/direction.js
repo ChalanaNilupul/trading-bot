@@ -59,12 +59,13 @@ function directedStrategy(name, value = "LONG") {
     throw new Error(
       "Current (score) has no short-entry strategy; choose a breakout, EMA, RSI or trend strategy",
     );
+  if (base.supportedDirections && !base.supportedDirections.includes(direction)) throw new Error(`${base.name} supports ${base.supportedDirections.join(", ")} only`);
   return {
     ...base,
     direction,
     description: `${base.description} Direction: ${direction}.`,
     describe: (ctx, candles, series, i) =>
-      `${direction} | close ${candles[i].close.toFixed(4)}`,
+      `${direction} | ${base.describe ? base.describe(ctx, candles, series, i) : `close ${candles[i].close.toFixed(4)}`}`,
     analyze: (ctx, candles, series, i) => {
       if (direction === "SHORT")
         return shortAnalysis(base.name, ctx, candles, series, i);

@@ -107,6 +107,7 @@ async function main() {
       }
 
       for (const strategy of STRATEGY_LIST) {
+        if ((strategy.requiredInterval && strategy.requiredInterval !== timeframe) || (strategy.supportedDirections && !strategy.supportedDirections.includes(DIRECTION))) continue;
         for (const trailing of [true, false]) {
           const trailingMode = trailing ? "ON" : "OFF";
           const label = `${strategy.name} | ${coin} | ${timeframe} | TRAILING ${trailingMode}`;

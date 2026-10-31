@@ -50,7 +50,7 @@ async function trainSingleCoin(options = {}, dependencies = {}) {
     haltResumeDays: 0,
   };
   const names = [
-    ...new Set([...STRATEGIES, ...BREAKOUT_VARIANTS].map((s) => s.name)),
+    ...new Set([...STRATEGIES, ...BREAKOUT_VARIANTS].filter(s => (!s.requiredInterval || s.requiredInterval === common.interval) && (!s.supportedDirections || s.supportedDirections.includes(direction)) && (!s.warmupBars || Math.floor(development.length * 0.75) > s.warmupBars + 1)).map((s) => s.name)),
   ].filter((name) => direction === "LONG" || name !== "Current (score)");
   const criteria = {
     minimumValidationTrades: 30,

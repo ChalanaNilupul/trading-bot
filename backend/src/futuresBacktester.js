@@ -235,6 +235,7 @@ async function runFuturesBacktest(options = {}) {
   }
 
   const strategy = directedStrategy(config.strategyName, config.direction);
+  if (strategy.requiredInterval && config.interval !== strategy.requiredInterval) throw new Error(`${strategy.name} requires interval=${strategy.requiredInterval}`);
   const candles = Array.isArray(options.candlesData)
     ? options.candlesData
     : await getFuturesHistoricalCandles(
@@ -251,16 +252,23 @@ async function runFuturesBacktest(options = {}) {
     options.filters && typeof options.filters === "object"
       ? options.filters
       : await getFuturesSymbolFilters(config.symbol).catch(() => ({}));
-  const splitIndex = Math.max(
-    WARMUP + 1,
-    Math.floor(candles.length * config.split),
-  );
+  const indexAt = (time, label) => {
+    if (!Number.isFinite(time)) throw new Error(`${label} must be a timestamp`);
+    const i = candles.findIndex(c => c.openTime >= time);
+    if (i < 0) throw new Error(`${label} is outside the dataset`);
+    return i;
+  };
+  const warmup = Math.max(WARMUP, strategy.warmupBars || 0);
+  const evaluationStart = options.evaluationStartTime === undefined ? warmup : indexAt(options.evaluationStartTime, 'evaluationStartTime');
+  if (evaluationStart < warmup || evaluationStart >= candles.length - 2) throw new Error(`Need at least ${warmup} warmup bars and a subsequent evaluation period`);
+  const splitIndex = options.splitTime === undefined ? Math.max(evaluationStart + 1, Math.floor(candles.length * config.split)) : indexAt(options.splitTime, 'splitTime');
+  if (splitIndex <= evaluationStart || splitIndex >= candles.length - 1) throw new Error('Split must be inside the evaluation period; request more candles');
   const full = runSegment({
     candles,
     strategy,
     config,
     filters,
-    start: WARMUP,
+    start: evaluationStart,
     end: candles.length,
   });
   const inSample = runSegment({
@@ -268,7 +276,7 @@ async function runFuturesBacktest(options = {}) {
     strategy,
     config,
     filters,
-    start: WARMUP,
+    start: evaluationStart,
     end: splitIndex,
   });
   const outSample = runSegment({
@@ -295,6 +303,8 @@ async function runFuturesBacktest(options = {}) {
       filters,
     },
     period: {
+      evaluationStartTime: candles[evaluationStart].openTime,
+      splitTime: candles[splitIndex].openTime,
       startTime: candles[0].openTime,
       endTime: candles[candles.length - 1].closeTime,
       days: Number(days.toFixed(2)),
@@ -345,3 +355,4 @@ async function runFuturesBacktest(options = {}) {
 }
 
 module.exports = { runFuturesBacktest, priceReturnPct };
+

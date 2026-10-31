@@ -19,7 +19,7 @@ const FEE_RATE = Number(process.env.FEE_RATE ?? 0.001);
 const SLIPPAGE = Number(process.env.SLIPPAGE ?? 0.0005);
 const REFRESH = process.env.REFRESH === "1";
 // SET=breakout runs only the breakout family with neighbouring settings (robustness check).
-const CANDIDATES = (process.env.SET || "").toLowerCase() === "breakout" ? BREAKOUT_VARIANTS : STRATEGIES;
+const CANDIDATES = (process.env.SET || "").toLowerCase() === "breakout" ? BREAKOUT_VARIANTS : STRATEGIES.filter(s => !s.requiredInterval);
 const CANDLES = { "15m": 20000, "1h": 20000, "4h": 10000, "1d": 3000 };
 
 // Pass criteria (pooled across coins, out-of-sample)
