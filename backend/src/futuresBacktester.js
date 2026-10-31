@@ -1,3 +1,4 @@
+const { buildTradeDiagnostics } = require("./tradeDiagnostics");
 const {
   getFuturesHistoricalCandles,
   getFuturesSymbolFilters,
@@ -322,6 +323,7 @@ async function runFuturesBacktest(options = {}) {
         "signals are evaluated at candle close and queued entries execute at the next candle open",
     },
     full: {
+      diagnostics: buildTradeDiagnostics(full.engine.trades, candles.slice(0, candles.length)),
       buyHold: full.buyHold,
       metrics: full.metrics,
       trades: full.engine.trades,
@@ -329,6 +331,7 @@ async function runFuturesBacktest(options = {}) {
       riskSummary: full.riskSummary,
     },
     inSample: {
+      diagnostics: buildTradeDiagnostics(inSample.engine.trades, candles.slice(0, splitIndex)),
       buyHold: inSample.buyHold,
       metrics: inSample.metrics,
       trades: inSample.engine.trades,
@@ -336,6 +339,7 @@ async function runFuturesBacktest(options = {}) {
       riskSummary: inSample.riskSummary,
     },
     outSample: {
+      diagnostics: buildTradeDiagnostics(outSample.engine.trades, candles.slice(0, candles.length)),
       buyHold: outSample.buyHold,
       metrics: outSample.metrics,
       trades: outSample.engine.trades,

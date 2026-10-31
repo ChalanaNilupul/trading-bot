@@ -456,6 +456,8 @@ class FuturesEngine {
       fees: p.entryFee + exitFee,
       funding: p.fundingPaid,
       netPnL,
+      initialStop: p.initialStop,
+      initialStopDistance: p.stopDistance,
       rMultiple: netPnL / Math.max(p.stopDistance * p.quantity, 1e-9),
     };
     this.trades.push(trade);
@@ -507,3 +509,4 @@ class FuturesEngine {
   }
 }
 module.exports = { FuturesEngine, FUTURES_DEFAULTS: DEFAULTS };
+

@@ -29,9 +29,8 @@ async function compare(candles, filters) {
     candleSHA256:hash(JSON.stringify(candles)),filters,
     note:'Diagnostic historical comparison, not an untouched holdout or proof of profitability. AI excluded. No settings, state or orders changed.',results};
 }
-async function main() {
-  const offline=process.argv.includes('--offline');
-  const dir=path.join(__dirname,'../data/sol-mtf-comparison');
+async function main({ directory, offline = process.argv.includes('--offline') } = {}) {
+  const dir=directory || path.join(__dirname,'../data/sol-mtf-comparison');
   const cache=path.join(dir,'dataset.json');
   let dataset;
   if (offline) dataset=JSON.parse(fs.readFileSync(cache,'utf8'));
@@ -49,11 +48,20 @@ async function main() {
   }
   if (dataset.candleSHA256 !== hash(JSON.stringify(dataset.candles))) throw new Error('Dataset checksum mismatch; rerun without --offline');
   const report=await compare(dataset.candles,dataset.filters);
-  report.sourceSHA256=hash(['compareMtf.js','multiTimeframe.js','futuresBacktester.js','futuresEngine.js','direction.js','strategies.js','indicators.js','metrics.js','riskGuard.js','riskManager.js'].filter(f=>fs.existsSync(path.join(__dirname,f))).map(f=>f+'\n'+fs.readFileSync(path.join(__dirname,f),'utf8')).join('\n'));
+  report.sourceSHA256=hash(['compareMtf.js','multiTimeframe.js','futuresBacktester.js','futuresEngine.js','direction.js','strategies.js','indicators.js','metrics.js','riskGuard.js','riskManager.js','tradeDiagnostics.js'].filter(f=>fs.existsSync(path.join(__dirname,f))).map(f=>f+'\n'+fs.readFileSync(path.join(__dirname,f),'utf8')).join('\n'));
   fs.mkdirSync(dir,{recursive:true});
   fs.writeFileSync(path.join(dir,'report.json'),JSON.stringify(report,null,2));
+  const diagnostics = { schemaVersion: 1, symbol: report.symbol, candleSHA256: report.candleSHA256,
+    sourceSHA256: report.sourceSHA256, evaluationStartTime: report.evaluationStartTime, splitTime: report.splitTime,
+    scenarios: report.results.map(({ label, result }) => ({ label, symbol: result.config.symbol, interval: result.config.interval,
+      segments: Object.fromEntries(['full', 'inSample', 'outSample'].map(key => [key, result[key].diagnostics])) })) };
+  fs.writeFileSync(path.join(dir, 'diagnostics.json'), JSON.stringify(diagnostics, null, 2));
+  console.table(diagnostics.scenarios.map(s => { const d = s.segments.outSample.summary; return {
+    Scenario: s.label, OOSNet: d.netPnL.toFixed(2), Fees: d.fees.toFixed(2), Funding: d.funding.toFixed(2),
+    Stops: d.stopExits, MedianHours: d.medianHoldingHours?.toFixed(2), WithoutBest: d.netWithoutLargestWinner.toFixed(2),
+    Recovery: `${d.recoveriesInCompleteWindows}/${d.completeRecoveryWindows}` }; }));
   console.table(report.results.map(({label,result:r})=>({Scenario:label,FullReturn:r.full.metrics.returnPct.toFixed(2),OOSReturn:r.outSample.metrics.returnPct.toFixed(2),OOSTrades:r.outSample.metrics.trades,OOSPF:r.outSample.metrics.profitFactor,OOSDrawdown:r.outSample.metrics.maxDrawdownPct.toFixed(2)})));
-  console.log(report.note+'\nReport: '+path.join(dir,'report.json'));
+  console.log(report.note+'\nReport: '+path.join(dir,'report.json')+'\nDashboard diagnostics: '+path.join(dir,'diagnostics.json'));
 }
 if(require.main===module) main().catch(e=>{console.error(e.message);process.exitCode=1;});
-module.exports={compare};
+module.exports={compare,main};
