@@ -16,6 +16,7 @@
     "tournament": "node --env-file=.env src/futuresTournament.js",
     "baseline:sol": "node src/solBaseline.js",
     "compare:mtf": "node src/compareMtf.js",
-    "diagnose:mtf": "node src/compareMtf.js --offline"
+    "diagnose:mtf": "node src/compareMtf.js --offline",
+    "compare:retest": "node src/compareMtf.js --offline --retest"
   }
 }

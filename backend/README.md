@@ -346,3 +346,51 @@ on 4h. The summary recovery denominator uses only complete windows. A price
 touch is before costs and does not simulate keeping a position open, so it is
 not evidence that wider stops would be profitable. This analysis uses future
 prices for research and is never supplied to strategy/AI entry decisions.
+
+## Fixed breakout–retest experiment
+
+The separate `4h trend + 15m breakout retest` paper candidate tests one entry
+hypothesis. It does not replace the original strategy or activate itself.
+
+Rules are fixed before testing (`breakout-retest-v1`):
+
+1. Require the existing completed 4h bullish filter (close > SMA200 and SMA50 > SMA200).
+2. A completed 15m close above the prior 40 completed candle highs arms a setup.
+   Freeze that prior high as the breakout level. Do not enter on this candle.
+3. Within the next four completed 15m candles, require low <= frozen level and
+   close > frozen level. Generate one BUY signal at that confirming close.
+4. A close below the level, unavailable/bearish 4h filter, or channel exit cancels
+   the setup. Equality at the close does not confirm. Without confirmation, expire
+   after the fourth later candle. Confirmation on that fourth candle is allowed.
+5. Completed/cancelled/expired setups are consumed. Later independent breakouts
+   may arm new setups; an active setup cannot be replaced by a higher level.
+
+The existing 2 ATR stop, channel-20/trend-off exit, direction, sizing and execution
+rules are unchanged. Historical entries execute at the next candle open; the
+paper runner retains its observed-price execution behaviour. Setups are derived
+causally from candle history, including after restart; they are not mutable
+process state. No AI decision is used by the research comparison.
+
+Run from `backend` using the existing checked candle cache:
+
+```powershell
+npm test
+npm run compare:retest
+```
+
+If that cache is missing, first run `npm run compare:mtf`. The retest command is
+explicitly offline and writes **separate** `data/sol-retest-comparison/report.json`
+and `diagnostics.json`, leaving the original comparison reports and candle cache
+unchanged. It compares current entries and retest entries, each with normal and
+doubled fees/slippage, on matching evaluation/split dates and risk settings.
+The report archives the fixed rules, source/candle fingerprints and diagnostics.
+Load the new `diagnostics.json` through the same dashboard Diagnostics page. A
+new dashboard backtest can also select the retest candidate with LONG, 15m and
+at least 10,000 candles; this never changes the running bot profile.
+
+These cached dates were already inspected to propose the rule change. Results
+are **development diagnostics**, even where the historical segment is called
+`outSample`; they are not fresh holdout evidence. Compare expectancy, costs,
+trade count, drawdown and winner concentration. Reduced trade count alone is not
+success. A retest can miss winning breakouts as well as losing ones, so any
+improvement still needs separate periods and a forward paper trial before use.

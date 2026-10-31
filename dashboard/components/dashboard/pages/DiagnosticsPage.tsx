@@ -77,9 +77,10 @@ export function DiagnosticsPage({ result }: { result: BacktestResult | null }) {
           event.target.value = "";
         }} />
       </label>
-      <p className="text-sm text-zinc-400">Run <code>npm run diagnose:mtf</code> in backend after downloading the comparison dataset. Choose <code>data/sol-mtf-comparison/diagnostics.json</code>. The file is read locally in your browser.</p>
+      <p className="text-sm text-zinc-400">Run <code>npm run diagnose:mtf</code> for the original comparison or <code>npm run compare:retest</code> for the retest experiment, using the existing candle cache. Choose <code>diagnostics.json</code> from the corresponding report folder. The file is read locally in your browser.</p>
       {uploaded && <button className="rounded-lg border border-white/15 px-3 py-2 text-sm" onClick={() => {setUploaded(null);setFilename("");setScenarioIndex(0);setReason("All");setPage(0);}}>Use latest dashboard backtest</button>}
       {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+      <p className="text-xs text-amber-200">If these dates informed rule changes, treat the results as development diagnostics. “Out of sample” identifies the historical split and does not make inspected data fresh validation.</p>
       <p className="text-xs text-zinc-500">Source: {uploaded ? filename : "Latest backtest in this dashboard session"}. Bot configuration and paper state are unchanged.</p>
     </section>
     {!diagnostic || !summary ? <EmptyState icon={Activity} title="No diagnostics loaded" description="Run a dashboard backtest, or load a newly generated diagnostics.json file above." /> : <>
