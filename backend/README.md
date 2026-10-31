@@ -296,3 +296,53 @@ and at least 10,000 candles. The backend rejects incompatible interval/direction
 or insufficient warmup. Single Coin Lab skips incompatible candidates and
 candidates without enough training warmup. No candidate is automatically
 activated and no profitability is claimed.
+
+## Trade diagnostics
+
+This adds retrospective analysis without changing entries, exits, AI decisions,
+configuration, or paper state. Every new futures backtest includes diagnostics
+for full, in-sample and out-of-sample segments. New closed trades also retain
+initial stop price and distance; old trade records are not modified.
+
+If you already ran `compare:mtf`, regenerate the reports using its cached dataset:
+
+```powershell
+npm test
+npm run diagnose:mtf
+```
+
+If the cache is missing, first run `npm run compare:mtf` to download it. Neither
+command calls AI or submits orders. `diagnose:mtf` verifies the candle checksum,
+then writes both `data/sol-mtf-comparison/report.json` and
+`data/sol-mtf-comparison/diagnostics.json`. The latter includes scenario labels,
+candle/source fingerprints and evaluation/split timestamps for provenance.
+
+Restart the dashboard with the updated code and open **Diagnostics**. Choose
+`diagnostics.json` using its file picker; the browser reads it locally without
+uploading it to the API. Alternatively, run a backtest in the dashboard and view
+its diagnostics in the same dashboard session. Select a scenario/segment, filter
+by exit reason, and page through the individual trades. Files are limited to 10 MB.
+Older comparison reports do not contain the new price-path analysis and must be
+regenerated from their candle cache. Reloading the dashboard clears browser state;
+reload your saved file as needed.
+
+The report includes costs, holding periods, exit groups, profit excluding the
+largest winners, observed MFE (maximum favourable excursion), observed MAE
+(maximum adverse excursion), stop distance, and excursion in initial-risk units.
+Funding is signed: positive is a cost; negative is a credit. Slippage is already
+embedded in execution prices and is not deducted again.
+
+**Candle limitations:** excursions use known execution prices plus highs/lows of
+fully held candles. Partial entry bars and exit-bar wicks are excluded because
+OHLC cannot establish which wick came before an intrabar exit. Values therefore
+represent observed lower bounds, not exact intrabar excursions. Initial-risk
+fields stay unknown for legacy trades lacking stop metadata.
+
+For STOP LOSS exits, the report checks whether any of the next four candles
+(after the exit timestamp) touched the original entry price. It distinguishes
+complete windows from truncated end-of-segment windows, and never looks past
+the selected segment. Four candles represent one hour on 15m and sixteen hours
+on 4h. The summary recovery denominator uses only complete windows. A price
+touch is before costs and does not simulate keeping a position open, so it is
+not evidence that wider stops would be profitable. This analysis uses future
+prices for research and is never supplied to strategy/AI entry decisions.

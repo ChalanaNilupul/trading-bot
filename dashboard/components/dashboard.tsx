@@ -39,12 +39,15 @@ import { AIPage } from "./dashboard/pages/AIPage";
 
 import { SingleCoinLabPage } from "./dashboard/pages/SingleCoinLabPage";
 
+import { DiagnosticsPage } from "./dashboard/pages/DiagnosticsPage";
+
 const nav = [
   ["Overview", LayoutDashboard],
   ["Markets", Radar],
   ["Positions", Wallet],
   ["Trades", Activity],
   ["Backtests", BarChart3],
+  ["Diagnostics", Activity],
   ["Single Coin Lab", SlidersHorizontal],
   ["Strategies", SlidersHorizontal],
   ["AI Monitor", Bot],
@@ -348,6 +351,9 @@ export default function Dashboard() {
             equity={equity}
           />
         );
+
+      case "Diagnostics":
+        return <DiagnosticsPage result={backtestResult} />;
 
       case "Single Coin Lab":
         return <SingleCoinLabPage status={status} />;
